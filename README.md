@@ -1,6 +1,6 @@
 # Bedrock Linux for iSH-AOK
 
-**Run 25+ Linux distributions simultaneously on iOS — from a single shell.**
+**Run 29 Linux distributions simultaneously on iOS — from a single shell.**
 
 Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) 0.7.31 Poki for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
 
@@ -10,17 +10,25 @@ Each distribution lives in its own **stratum**: an isolated root filesystem that
 
 ## Features
 
-- **25+ distributions** available out of the box — Alpine, Debian, Ubuntu, Fedora, Arch, Kali, Gentoo, Void, openSUSE, and more
+- **29 distributions** available out of the box — Alpine, Debian, Ubuntu, Fedora, Arch, Kali, Gentoo, Void, openSUSE, and more
 - **One-command fetch** — `brl fetch alpine` downloads, extracts, and configures a stratum in seconds
 - **Cross-distro command access** — install `vim` in Debian, `htop` in Alpine, use both from anywhere
 - **Streaming downloads** — rootfs tarballs are piped directly through the decompressor; no temp file, no second pass
+- **aria2c acceleration** — when available, downloads use 8 parallel connections for significantly faster fetches
 - **Automatic dependency resolution** — detects the host package manager (apk, apt, pacman, dnf, ...) and installs missing tools
 - **Mount namespace isolation** — when iSH-AOK exposes namespace support, strat sessions get private mounts that vanish on exit
 - **Automatic DNS, TLS, and locale setup** — every stratum gets working name resolution, certificates, and a UTF-8 locale
 - **Per-distro package manager fixes** — iSH-AOK-specific patches for pacman, apt, dnf, zypper, xbps, apk, opkg, and portage
 - **AUR support** — Arch strata get `yay` installed automatically with an unprivileged builder user
-- **Permanent and non-permanent editions** — choose whether Bedrock survives a reboot or stays session-only
+- **Three editions** — non-permanent (`brl`), permanent (`brl-permanent`), and integrated (`bedrockport.sh`)
 - **Clean uninstaller** — the permanent edition ships a dedicated `brl-uninstall` script that fully restores the host
+- **Runtime capability detection** — probes what the iSH-AOK kernel actually supports (namespaces, cgroups, filesystems) and adapts
+- **Self-test suite** — `brl test` runs a full regression suite covering environment, structure, namespaces, and strat round-trips
+- **Health checks with auto-repair** — `brl health` verifies each stratum can exec and auto-repairs broken ones
+- **Integrity verification** — `brl verify` checks the Bedrock directory structure with optional `--repair`
+- **Rollback points** — snapshot and restore Bedrock configuration to undo bad changes
+- **systemd boot integration** — optional init service and target so `/bedrock` comes up at boot
+- **AOK roots registration** — auto-discovers `/AOK/roots` and registers them as Bedrock strata
 
 ## Supported Distributions
 
@@ -32,7 +40,7 @@ Each distribution lives in its own **stratum**: an isolated root filesystem that
 | **Arch family** | Arch Linux (LXC), Arch Linux ARM (native) |
 | **Independent** | openSUSE, Void, Gentoo, Funtoo, ALT Linux |
 
-All distributions are fetched as aarch64 rootfs images from the [Linux Containers](https://images.linuxcontainers.org) image server or official distribution mirrors.
+29 distributions total. All are fetched as aarch64 rootfs images from the [Linux Containers](https://images.linuxcontainers.org) image server or official distribution mirrors.
 
 ## Requirements
 
@@ -68,6 +76,22 @@ chmod +x brl
 brl fetch alpine
 brl shell alpine
 ```
+
+### Integrated Edition (`bedrockport.sh`)
+
+The integrated edition is a unified script that combines `brl` + `strat` + installer into one file. It adds capability detection, self-tests, health checks, rollback, systemd boot integration, and AOK roots registration on top of all standard `brl` functionality.
+
+```sh
+# Install via the official installer interface
+chmod +x bedrockport.sh
+./bedrockport.sh --hijack
+
+# Or use as brl directly
+cp bedrockport.sh /usr/local/bin/brl
+brl hijack
+```
+
+The integrated edition also supports `--update` and `--restat` (re-run capability detection).
 
 ## Usage
 
@@ -116,6 +140,22 @@ brl tutorial           # Quick-start tutorial
 brl version            # Show version
 ```
 
+### Integrated Edition Commands
+
+These commands are available in `bedrockport.sh`:
+
+```sh
+brl capabilities [--json]     # Show detected iSH-AOK kernel capabilities
+brl test                      # Run full self-test / regression suite
+brl health [stratum]          # Health check strata (auto-repairs failures)
+brl verify [--repair]         # Integrity check on Bedrock directory structure
+brl rollback list             # List saved rollback points
+brl rollback create [label]   # Create a named rollback point
+brl rollback restore <id>     # Restore a previous rollback point
+brl integrate                 # Full integration setup (caps + verify + units + AOK roots)
+brl register-aok              # Discover and register /AOK/roots as strata
+```
+
 ### Copy Files Between Strata
 
 ```sh
@@ -149,6 +189,8 @@ brl copy <src-stratum> /path/to/file <dst-stratum> [dest-path]
 
 **Mount isolation**: on iSH-AOK builds that support `unshare -m`, each `strat` invocation runs inside a private mount namespace. Pseudo-filesystems (`/proc`, `/sys`, `/dev`, `/run`) are mounted per-session and cleaned up automatically on exit. On older builds, mounts are shared globally and persist until `brl umount`.
 
+**Capability detection** (integrated edition): at hijack time, `bedrockport.sh` probes every kernel feature — each namespace type (`mount`, `pid`, `uts`, `ipc`, `net`, `user`, `cgroup`), filesystem support (`procfs`, `sysfs`, `tmpfs`, `devpts`), `bind_mount`, `seccomp`, `FUSE`, `cgroup v2`, and AOK-specific roots. Each is classified as `native`, `emulated`, or `unavailable`. The results are saved to `/bedrock/etc/capabilities.conf` and drive runtime decisions throughout the script.
+
 ## How It Differs from Upstream Bedrock
 
 | Aspect | Upstream Bedrock Linux | Bedrock-AOK |
@@ -157,7 +199,7 @@ brl copy <src-stratum> /path/to/file <dst-stratum> [dest-path]
 | **Isolation** | Kernel namespaces, FUSE, xattrs | `chroot` + bind mounts |
 | **Cross-filesystem** | FUSE-based crossfs | Shell shim scripts in `/bedrock/cross/bin/` |
 | **Target** | Bare-metal / VM x86_64 | iSH-AOK aarch64 on iOS |
-| **Init integration** | Hijacks PID 1 | No init modification |
+| **Init integration** | Hijacks PID 1 | Optional systemd service (PID 1 stays untouched) |
 | **Package sources** | Mirror-based with GPG | LXC image server + direct mirrors |
 
 ## Uninstalling (Permanent Edition)
