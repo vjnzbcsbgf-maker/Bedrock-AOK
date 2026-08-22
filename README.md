@@ -8,8 +8,11 @@
 [![Status: In Development](https://img.shields.io/badge/Status-In_Development-FFDD57.svg?labelColor=555)](#development-status)
 [![Arch: aarch64](https://img.shields.io/badge/Arch-aarch64-lightgrey.svg)](#)
 [![Based on: Bedrock Linux](https://img.shields.io/badge/Based_on-Bedrock_Linux-7B42BC.svg)](https://bedrocklinux.org)
+[![Website](https://img.shields.io/badge/Website-Bedrock--AOK-c4a574.svg)](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/)
 
 > **Run 29 Linux distributions simultaneously on iOS — from a single shell.**
+>
+> **[Website](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/)** · **[Forum](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/#forum)** · **[Releases](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/#releases)** · **[GitHub](https://github.com/vjnzbcsbgf-maker/Bedrock-AOK)**
 
 Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) 0.7.31 Poki for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
 
