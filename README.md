@@ -220,6 +220,25 @@ Contributions are welcome. This project is a community port — it is not affili
 - [iSH](https://github.com/ish-app/ish) — the original x86 Linux emulator for iOS that started it all
 - [Linux Containers](https://images.linuxcontainers.org) — the image server that provides rootfs tarballs for most supported distributions
 
+## Copyright and Attribution
+
+- **Linux** is a registered trademark of Linus Torvalds. The Linux kernel is released under the GNU General Public License v2.0. This project runs on top of Linux and would not exist without the open-source ecosystem Linus Torvalds created.
+- **Bedrock Linux**, its name, logo, documentation, and website content are copyright © [paradigm](https://bedrocklinux.org). Bedrock-AOK is an independent community port and is not affiliated with or endorsed by the upstream Bedrock Linux project.
+- **iSH** is copyright © the [iSH contributors](https://github.com/ish-app/ish). **iSH-AOK** is copyright © [emkey1](https://github.com/emkey1/AOK-Filesystem-Tools) and contributors.
+
+All upstream trademarks, logos, and copyrights remain the property of their respective owners.
+
+## Open-Source Requirement
+
+This project is licensed under the **GNU General Public License v2.0** — a copyleft license. Under its terms:
+
+- Any fork, derivative work, or redistribution of this project **must** be released under the same GPLv2 license.
+- Any substantial contribution incorporated into this project is subject to the GPLv2 and must remain open source.
+- Modified versions **must** carry prominent notices stating what was changed and the date of each change.
+- You **may not** distribute this software, or any work based on it, under proprietary or closed-source terms.
+
+If you fork this project or build upon it, you are legally required to make your source code available under the GPLv2. See [LICENSE](LICENSE) for the full license text.
+
 ## License
 
 This project is licensed under the GNU General Public License v2.0. See [LICENSE](LICENSE) for the full text.
