@@ -1,10 +1,21 @@
 # Bedrock Linux for iSH-AOK
 
+[![License: GPL v2](https://img.shields.io/badge/License-GPLv2-blue.svg)](LICENSE)
+[![Shell](https://img.shields.io/badge/Language-POSIX%20Shell-green.svg)](#)
+[![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20iPadOS-black.svg)](https://github.com/emkey1/AOK-Filesystem-Tools)
+[![Version](https://img.shields.io/badge/Version-0.7.31%20Poki-orange.svg)](#)
+[![Distros](https://img.shields.io/badge/Strata-29%20distros-brightgreen.svg)](#supported-distributions)
+[![Status](https://img.shields.io/badge/Status-In%20Development-yellow.svg)](#development-status)
+[![Arch](https://img.shields.io/badge/Arch-aarch64-lightgrey.svg)](#)
+[![Bedrock](https://img.shields.io/badge/Based%20on-Bedrock%20Linux-purple.svg)](https://bedrocklinux.org)
+
 **Run 29 Linux distributions simultaneously on iOS — from a single shell.**
 
 Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) 0.7.31 Poki for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
 
 Each distribution lives in its own **stratum**: an isolated root filesystem that shares the host's kernel, network, and device tree. Commands installed in any stratum are automatically wired into a unified `PATH` so you can mix packages freely across distros.
+
+> **In Development** — This project is under active development. Some iSH-AOK kernel capabilities (certain namespace types, cgroup v2, seccomp filters) may not be detected or fully functional depending on your iSH-AOK build version. The capability detection system (`brl capabilities`) will report what works on your specific build. Features that rely on unavailable capabilities degrade gracefully — the core stratum system works on all supported iSH-AOK versions.
 
 ---
 
@@ -245,6 +256,29 @@ brl umount <stratum> # Unmount one
 brl update-urls      # Re-resolve all source URLs from live mirrors
 brl fetch <stratum>  # Retry
 ```
+
+## Development Status
+
+This project is under active development. The following areas are being worked on:
+
+| Feature | Status |
+|---|---|
+| Core stratum system (fetch, shell, strat) | Stable |
+| Cross-command wiring (crossfs shims) | Stable |
+| 29-distro catalog with live URL resolution | Stable |
+| Streaming downloads + aria2c acceleration | Stable |
+| Per-distro package manager fixes | Stable |
+| Mount namespace isolation | Working (depends on iSH-AOK build) |
+| PID / UTS / IPC / Net namespace isolation | In progress (depends on iSH-AOK kernel) |
+| User namespace support | In progress |
+| cgroup v2 integration | In progress |
+| seccomp filter detection | In progress |
+| systemd boot integration | Experimental |
+| AOK roots auto-registration | Experimental |
+| Rollback / integrity verification | Stable |
+| Self-test suite | Stable |
+
+Not all iSH-AOK kernel builds expose the same capabilities. The capability detection system (`brl capabilities`) probes what actually works on your specific build and adapts accordingly. Features that depend on unavailable kernel support degrade gracefully — the core stratum functionality (fetch, shell, strat, cross-command access) works on all supported iSH-AOK versions.
 
 ## Contributing
 
