@@ -2,7 +2,7 @@
 
 **Run 25+ Linux distributions simultaneously on iOS — from a single shell.**
 
-Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) 0.7.31 Poki for [iSH-AOK](https://github.com/ish-app/ish) (aarch64). It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
+Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) 0.7.31 Poki for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
 
 Each distribution lives in its own **stratum**: an isolated root filesystem that shares the host's kernel, network, and device tree. Commands installed in any stratum are automatically wired into a unified `PATH` so you can mix packages freely across distros.
 
@@ -36,7 +36,7 @@ All distributions are fetched as aarch64 rootfs images from the [Linux Container
 
 ## Requirements
 
-- [iSH-AOK](https://github.com/ish-app/ish) running on iOS/iPadOS (aarch64)
+- [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) running on iOS/iPadOS (aarch64)
 - Root access (iSH-AOK runs as root by default)
 - Internet connection for fetching strata
 - ~8 MB for Alpine, ~50-300 MB per additional stratum depending on distro
@@ -216,7 +216,8 @@ Contributions are welcome. This project is a community port — it is not affili
 ## Acknowledgments
 
 - [Bedrock Linux](https://bedrocklinux.org) by paradigm — the original project that makes multi-distro Linux possible
-- [iSH-AOK](https://github.com/ish-app/ish) — the x86/aarch64 Linux emulator for iOS that makes all of this run on a phone
+- [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) by emkey1 — the enhanced iSH fork with aarch64 support, real filesystem tools, and expanded kernel compatibility
+- [iSH](https://github.com/ish-app/ish) — the original x86 Linux emulator for iOS that started it all
 - [Linux Containers](https://images.linuxcontainers.org) — the image server that provides rootfs tarballs for most supported distributions
 
 ## License
