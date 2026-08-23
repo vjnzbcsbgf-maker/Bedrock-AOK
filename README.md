@@ -1,5 +1,9 @@
 # Bedrock Linux for iSH-AOK
 
+<p align="center">
+  <img src="docs/bedrock-banner.jpg" alt="Bedrock Linux 0.7.31 Poki (iSH-AOK)" width="700">
+</p>
+
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![POSIX Shell](https://img.shields.io/badge/Language-POSIX_Shell-4EAA25.svg)](#)
 [![Platform: iOS | iPadOS](https://img.shields.io/badge/Platform-iOS_|_iPadOS-000000.svg?logo=apple&logoColor=white)](https://github.com/emkey1/AOK-Filesystem-Tools)
