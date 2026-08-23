@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bedrock-AOK &mdash; Bedrock Linux for iSH-AOK</title>
+  <meta name="description" content="Run 29+ Linux distributions simultaneously on iOS through iSH-AOK. A Bedrock Linux port using chroot-based strata.">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <span class="nav-logo" onclick="showTab('home')">
+      <span class="n-rock">Bedrock</span><span class="n-dash">-</span><span class="n-aok">AOK</span>
+    </span>
+    <button class="nav-mobile" onclick="document.querySelector('.nav-tabs').classList.toggle('open')" aria-label="Menu">&#9776;</button>
+    <div class="nav-tabs" id="navTabs">
+      <button class="active" data-tab="home" onclick="showTab('home')">Home</button>
+      <button data-tab="forum" onclick="showTab('forum')">Forum</button>
+      <button data-tab="releases" onclick="showTab('releases')">Releases</button>
+      <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK" target="_blank" rel="noopener">
+        GitHub <svg viewBox="0 0 12 12" width="12" height="12" stroke="currentColor" fill="none"><path d="M3.5 2h6.5v6.5M9.5 2.5l-7 7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════ HOME ═══════════════ -->
+<div class="page visible" id="page-home">
+<div class="wrap">
+
+  <section class="hero">
+    <div class="hero-art" aria-hidden="true"><span class="rock"> ____           _                 _
+| __ )  ___  __| |_ __ ___   ___| | __
+|  _ \ / _ \/ _` | '__/ _ \ / __| |/ /
+| |_) |  __/ (_| | | | (_) | (__|   &lt;
+|____/ \___|\__,_|_|  \___/ \___|_|\_\</span>
+<span class="fork">              _    ___  _  __
+             / \  / _ \| |/ /
+            / _ \| | | | ' /
+           / ___ \ |_| | . \
+          /_/   \_\___/|_|\_\</span></div>
+
+    <h1 class="hero-h1">
+      <span class="h-rock">Bedrock</span><span class="h-mid"> Linux </span><span class="h-aok">-AOK</span>
+    </h1>
+    <p class="hero-tagline">Run <strong>29 Linux distributions</strong> simultaneously on iOS through iSH-AOK. Mix and match packages across distros with chroot-based strata.</p>
+
+    <div class="badges">
+      <img src="https://img.shields.io/badge/platform-iSH--AOK-24292f?style=flat-square" alt="Platform: iSH-AOK">
+      <img src="https://img.shields.io/badge/license-GPLv2-3572a5?style=flat-square" alt="License: GPLv2">
+      <img src="https://img.shields.io/badge/strata-29_distros-2ea44f?style=flat-square" alt="29 Distros">
+      <img src="https://img.shields.io/badge/arch-aarch64-7b42bc?style=flat-square" alt="Arch: aarch64">
+      <img src="https://img.shields.io/badge/status-active_dev-c98b1d?style=flat-square" alt="Active Development">
+      <img src="https://img.shields.io/badge/version-0.7.31_Poki-bc4a3c?style=flat-square" alt="Version: 0.7.31 Poki">
+    </div>
+
+    <div class="hero-ctas">
+      <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK" class="btn btn-sand" target="_blank" rel="noopener">View on GitHub</a>
+      <button class="btn btn-ghost" onclick="showTab('releases')">Releases</button>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2 class="sec-head">Features</h2>
+    <p class="sec-sub">Everything you need to run multiple Linux distributions on iOS.</p>
+    <div class="feat-grid">
+      <div class="feat">
+        <h3>29 Distributions</h3>
+        <p>Alpine, Debian, Ubuntu, Fedora, Arch, Kali, Gentoo, Void, openSUSE, and 20 more &mdash; all running side by side.</p>
+      </div>
+      <div class="feat">
+        <h3>Three Editions</h3>
+        <p>Non-permanent, permanent, or fully integrated with health checks, rollback, and boot integration.</p>
+      </div>
+      <div class="feat">
+        <h3>Capability Detection</h3>
+        <p>Probes iSH-AOK runtime capabilities &mdash; namespaces, cgroups, bind mounts &mdash; and adapts automatically.</p>
+      </div>
+      <div class="feat">
+        <h3>Safe Rollback</h3>
+        <p>Create snapshots before changes. Roll back if something goes wrong. Health checks verify stratum integrity.</p>
+      </div>
+      <div class="feat">
+        <h3>Cross-Distro Packages</h3>
+        <p>Use apt from Debian, pacman from Arch, dnf from Fedora in the same session. Mix packages freely.</p>
+      </div>
+      <div class="feat">
+        <h3>Integration Layer</h3>
+        <p>systemd boot units, AOK roots registration, structured logging, and a full self-test suite.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2 class="sec-head">Editions</h2>
+    <p class="sec-sub">Choose the right edition for your setup.</p>
+    <div class="ed-grid">
+      <div class="ed-card">
+        <div class="ed-name">Non-Permanent</div>
+        <div class="ed-file">brl</div>
+        <ul class="ed-feat-list">
+          <li>Full stratum management</li>
+          <li>Cross-distro commands</li>
+          <li>Reversible with unhijack</li>
+          <li class="no">Does not persist across reboots</li>
+          <li class="no">No integration layer</li>
+        </ul>
+      </div>
+      <div class="ed-card">
+        <div class="ed-name">Permanent</div>
+        <div class="ed-file">brl-permanent</div>
+        <ul class="ed-feat-list">
+          <li>Full stratum management</li>
+          <li>Cross-distro commands</li>
+          <li>Survives reboots</li>
+          <li>Dedicated uninstaller</li>
+          <li class="no">No integration layer</li>
+        </ul>
+      </div>
+      <div class="ed-card recommended">
+        <div class="ed-name">Integrated</div>
+        <div class="ed-file">bedrockport.sh</div>
+        <ul class="ed-feat-list">
+          <li>Everything in Permanent</li>
+          <li>Capability detection</li>
+          <li>Self-test suite</li>
+          <li>Health checks &amp; rollback</li>
+          <li>systemd boot integration</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2 class="sec-head">Supported Distributions</h2>
+    <p class="sec-sub">29 distributions with aarch64 rootfs support.</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Category</th><th>Distributions</th></tr></thead>
+        <tbody>
+          <tr><td>Lightweight</td><td>Alpine, BusyBox, OpenWrt, Chimera</td></tr>
+          <tr><td>Debian family</td><td>Debian, Ubuntu, Devuan, Kali, Parrot, Apertis</td></tr>
+          <tr><td>Red Hat family</td><td>Fedora, Rocky Linux, AlmaLinux, Oracle Linux, CentOS Stream, Amazon Linux, Springdale, openEuler</td></tr>
+          <tr><td>Arch family</td><td>Arch Linux (LXC), Arch Linux ARM (native aarch64)</td></tr>
+          <tr><td>Independent</td><td>openSUSE, Void, Gentoo, Funtoo, ALT Linux</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2 class="sec-head">Quick Start</h2>
+    <p class="sec-sub">Get running in under a minute.</p>
+    <div class="codeblock"><span class="cm"># Download the integrated edition</span>
+<span class="kw">wget</span> <span class="pr">https://raw.githubusercontent.com/vjnzbcsbgf-maker/Bedrock-AOK/main/bedrockport.sh</span>
+<span class="kw">chmod</span> +x bedrockport.sh
+
+<span class="cm"># Install (hijack mode)</span>
+./bedrockport.sh <span class="pr">--hijack</span>
+
+<span class="cm"># Fetch a stratum and use it</span>
+<span class="kw">brl</span> fetch alpine
+<span class="kw">strat</span> alpine apk add htop
+
+<span class="cm"># List all installed strata</span>
+<span class="kw">brl</span> list</div>
+  </section>
+
+</div>
+</div>
+
+<!-- ═══════════════ FORUM ═══════════════ -->
+<div class="page" id="page-forum">
+<div class="wrap" style="padding-top: 2rem;">
+
+  <section class="sec">
+    <h2 class="sec-head">Community Forum</h2>
+    <p class="sec-sub">Report bugs, request features, and discuss Bedrock-AOK.</p>
+
+    <div class="forum-intro">
+      <h3>How It Works</h3>
+      <p>Discussions are powered by <strong>GitHub Discussions</strong> via <a href="https://giscus.app" target="_blank" rel="noopener">Giscus</a>. Participate with your GitHub account &mdash; no separate registration.</p>
+      <div class="forum-rules">
+        <div class="f-rule">
+          <span class="f-rule-dot">&#x1f41b;</span>
+          <div><strong>Bug Reports</strong><br><span>Include iSH-AOK version, edition, and repro steps.</span></div>
+        </div>
+        <div class="f-rule">
+          <span class="f-rule-dot">&#x1f4a1;</span>
+          <div><strong>Feature Requests</strong><br><span>Describe the use case. Check existing threads first.</span></div>
+        </div>
+        <div class="f-rule">
+          <span class="f-rule-dot">&#x2753;</span>
+          <div><strong>Questions</strong><br><span>Search existing threads before posting. Include logs.</span></div>
+        </div>
+        <div class="f-rule">
+          <span class="f-rule-dot">&#x1f91d;</span>
+          <div><strong>Be Respectful</strong><br><span>Follow the GitHub Community Guidelines.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div id="giscus-container">
+      <!-- Giscus widget loads here -->
+    </div>
+
+    <div class="forum-links">
+      <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/discussions/new?category=general" class="forum-link" target="_blank" rel="noopener">
+        <h4>Start a Discussion</h4>
+        <p>Open a new thread in the General category.</p>
+      </a>
+      <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/issues/new" class="forum-link" target="_blank" rel="noopener">
+        <h4>File a Bug Report</h4>
+        <p>Report an issue with detailed reproduction steps.</p>
+      </a>
+      <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/discussions" class="forum-link" target="_blank" rel="noopener">
+        <h4>Browse All Discussions</h4>
+        <p>View the full list with all categories and filters.</p>
+      </a>
+    </div>
+  </section>
+
+</div>
+</div>
+
+<!-- ═══════════════ RELEASES ═══════════════ -->
+<div class="page" id="page-releases">
+<div class="wrap" style="padding-top: 2rem;">
+
+  <section class="sec">
+    <h2 class="sec-head">Releases</h2>
+    <p class="sec-sub">Download Bedrock-AOK. Only repository owners can publish releases.</p>
+
+    <div class="rel-note">Releases are published on GitHub by the project maintainers. Each release includes the three edition scripts ready to download.</div>
+
+    <div id="relList">
+      <div class="loading" id="relLoading">
+        <div class="loading-spinner"></div>
+        <p>Loading releases...</p>
+      </div>
+    </div>
+
+    <div style="text-align:center; margin-top: 1.5rem;">
+      <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/releases" class="btn btn-ghost" target="_blank" rel="noopener">View All Releases on GitHub</a>
+    </div>
+  </section>
+
+</div>
+</div>
+
+<footer class="foot">
+  <div class="foot-links">
+    <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK">GitHub</a>
+    <a href="https://bedrocklinux.org">Bedrock Linux</a>
+    <a href="https://github.com/emkey1/AOK-Filesystem-Tools">iSH-AOK</a>
+  </div>
+  <p>Bedrock-AOK &copy; 2024&ndash;2026. Based on <a href="https://bedrocklinux.org">Bedrock Linux</a> by paradigm. Licensed under <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/blob/main/LICENSE">GPLv2</a>.</p>
+</footer>
+
+<script>
+// Tab navigation
+function showTab(t) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('visible'); });
+  document.getElementById('page-' + t).classList.add('visible');
+  document.querySelectorAll('.nav-tabs button[data-tab]').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-tab') === t);
+  });
+  document.querySelector('.nav-tabs').classList.remove('open');
+  window.scrollTo(0, 0);
+
+  if (t === 'forum' && !window._giscusLoaded) {
+    loadGiscus();
+  }
+  if (t === 'releases' && !window._relLoaded) {
+    loadReleases();
+  }
+}
+
+// Giscus integration
+function loadGiscus() {
+  window._giscusLoaded = true;
+  var container = document.getElementById('giscus-container');
+  var script = document.createElement('script');
+  script.src = 'https://giscus.app/client.js';
+  script.setAttribute('data-repo', 'vjnzbcsbgf-maker/Bedrock-AOK');
+  // SETUP REQUIRED: Replace these with your actual IDs from https://giscus.app
+  script.setAttribute('data-repo-id', '');
+  script.setAttribute('data-category', 'General');
+  script.setAttribute('data-category-id', '');
+  script.setAttribute('data-mapping', 'title');
+  script.setAttribute('data-strict', '0');
+  script.setAttribute('data-reactions-enabled', '1');
+  script.setAttribute('data-emit-metadata', '0');
+  script.setAttribute('data-input-position', 'top');
+  script.setAttribute('data-theme', 'dark_dimmed');
+  script.setAttribute('data-lang', 'en');
+  script.setAttribute('data-loading', 'lazy');
+  script.crossOrigin = 'anonymous';
+  script.async = true;
+  container.appendChild(script);
+}
+
+// GitHub Releases API
+function loadReleases() {
+  window._relLoaded = true;
+  var container = document.getElementById('relList');
+  var loading = document.getElementById('relLoading');
+
+  fetch('https://api.github.com/repos/vjnzbcsbgf-maker/Bedrock-AOK/releases')
+    .then(function(r) { return r.json(); })
+    .then(function(releases) {
+      if (loading) loading.remove();
+
+      if (!releases || !releases.length || releases.message) {
+        container.innerHTML =
+          '<div class="rel-card">' +
+          '<div class="rel-head"><div><span class="rel-ver">v0.7.31</span> <span class="rel-latest">Latest</span></div>' +
+          '<span class="rel-date">August 2026</span></div>' +
+          '<div class="rel-name">Poki &mdash; Initial Public Release</div>' +
+          '<div class="rel-body"><p>First public release of Bedrock-AOK for iSH-AOK (aarch64/iOS).</p>' +
+          '<ul><li>29 Linux distributions</li><li>Three editions</li><li>Capability detection</li><li>Health checks and rollback</li></ul></div>' +
+          '<div class="rel-assets"><div class="rel-assets-head">Assets</div>' +
+          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/bedrockport.sh" class="rel-dl" target="_blank">bedrockport.sh</a>' +
+          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent" class="rel-dl" target="_blank">brl-permanent</a>' +
+          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl" class="rel-dl" target="_blank">brl</a>' +
+          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-uninstall" class="rel-dl" target="_blank">brl-uninstall</a>' +
+          '</div></div>';
+        return;
+      }
+
+      container.innerHTML = '';
+      releases.forEach(function(rel, i) {
+        var date = new Date(rel.published_at || rel.created_at);
+        var dateStr = date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+        var card = document.createElement('div');
+        card.className = 'rel-card';
+
+        var latestBadge = i === 0 ? ' <span class="rel-latest">Latest</span>' : '';
+        var assets = '';
+        if (rel.assets && rel.assets.length) {
+          assets = '<div class="rel-assets"><div class="rel-assets-head">Assets</div>';
+          rel.assets.forEach(function(a) {
+            assets += '<a href="' + a.browser_download_url + '" class="rel-dl" target="_blank" rel="noopener">' + a.name + '</a>';
+          });
+          assets += '</div>';
+        }
+
+        var body = (rel.body || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/\n/g, '<br>');
+
+        card.innerHTML =
+          '<div class="rel-head"><div><span class="rel-ver">' + rel.tag_name + '</span>' + latestBadge + '</div>' +
+          '<span class="rel-date">' + dateStr + '</span></div>' +
+          '<div class="rel-name">' + (rel.name || rel.tag_name) + '</div>' +
+          '<div class="rel-body">' + body + '</div>' +
+          assets;
+
+        container.appendChild(card);
+      });
+    })
+    .catch(function() {
+      if (loading) loading.remove();
+      container.innerHTML =
+        '<div class="rel-empty"><div class="rel-empty-icon">&#x1f4e6;</div>' +
+        '<p>Could not load releases. <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/releases" target="_blank" rel="noopener">View on GitHub</a></p></div>';
+    });
+}
+</script>
+
+</body>
+</html>

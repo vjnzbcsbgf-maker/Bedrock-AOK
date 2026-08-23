@@ -1,0 +1,202 @@
+#!/bin/sh
+# ============================================================================
+#  brl-uninstall — total removal of a permanent Bedrock Linux (iSH-AOK) install
+#
+#  The permanent edition blocks `brl unhijack` on purpose. This script is the
+#  deliberate, explicit way to fully undo it: it unmounts every stratum, frees
+#  /etc/os-release, removes all Bedrock files and integration, and restores the
+#  host to a plain Linux system.
+#
+#  Usage:  ./brl-uninstall              (interactive, asks about strata)
+#          ./brl-uninstall --keep-strata   (remove Bedrock, keep /bedrock/strata)
+#          ./brl-uninstall --purge         (remove EVERYTHING incl. strata, no prompt)
+#          ./brl-uninstall --yes           (assume yes to the main confirm)
+# ============================================================================
+set -u
+
+BR="/bedrock"
+STRATA="${BR}/strata"
+BETC="${BR}/etc"
+BRUN="${BR}/run"
+
+ESC=$(printf '\033')
+R="${ESC}[31m" G="${ESC}[32m" Y="${ESC}[33m" B="${ESC}[1m" Z="${ESC}[0m"
+say()  { printf "%s\n" "$*"; }
+ok()   { printf "  ${G}*${Z} %s\n" "$*"; }
+info() { printf "  : %s\n" "$*"; }
+warn() { printf "  ${Y}!${Z} %s\n" "$*"; }
+err()  { printf "${R}uninstall: %s${Z}\n" "$*" >&2; }
+has()  { command -v "$1" >/dev/null 2>&1; }
+
+[ "$(id -u)" -eq 0 ] || { err "must run as root."; exit 1; }
+
+KEEP_STRATA=0
+PURGE=0
+ASSUME_YES=0
+for _a in "$@"; do
+    case "$_a" in
+        --keep-strata) KEEP_STRATA=1 ;;
+        --purge)       PURGE=1; ASSUME_YES=1 ;;
+        --yes|-y)      ASSUME_YES=1 ;;
+        -h|--help)
+            say "Usage: brl-uninstall [--keep-strata | --purge] [--yes]"
+            say "  (no flag)      interactive — asks whether to delete strata"
+            say "  --keep-strata  remove Bedrock but leave ${STRATA} intact"
+            say "  --purge        remove absolutely everything, no strata prompt"
+            say "  --yes          skip the top-level confirmation"
+            exit 0 ;;
+        *) err "unknown option: $_a"; exit 1 ;;
+    esac
+done
+
+say ""
+say "${B}Bedrock Linux — permanent install uninstaller${Z}"
+if [ ! -d "$BR" ]; then
+    warn "no ${BR} directory found — Bedrock does not appear to be installed."
+    warn "will still clean up any leftover symlinks and integration."
+fi
+
+# ── confirmation ────────────────────────────────────────────────────────
+if [ "$ASSUME_YES" != "1" ]; then
+    say ""
+    say "${Y}This will remove Bedrock Linux and restore the host system.${Z}"
+    printf "Continue? [y/N] "
+    read -r _c; case "$_c" in y|Y) ;; *) say "aborted."; exit 0 ;; esac
+fi
+
+# ── 1. unmount every stratum (all bind mounts under /bedrock) ────────────
+say ""
+info "unmounting all strata..."
+if [ -r /proc/mounts ] && has umount; then
+    # Unmount deepest paths first to avoid "target is busy".
+    awk -v p="$BR" '$2 ~ ("^" p) {print length($2), $2}' /proc/mounts 2>/dev/null \
+        | sort -rn | cut -d' ' -f2- | while IFS= read -r _mp; do
+        umount "$_mp" 2>/dev/null && ok "unmounted $_mp" || umount -l "$_mp" 2>/dev/null || true
+    done
+fi
+# Second pass: known pseudo mounts per stratum
+if [ -d "$STRATA" ] && has umount; then
+    for _sd in "$STRATA"/*; do
+        [ -d "$_sd" ] || continue
+        for _m in dev/shm dev/pts dev proc sys tmp run; do
+            _t="${_sd}/${_m}"
+            [ -r /proc/mounts ] && awk -v p="$_t" '$2==p{f=1}END{exit !f}' /proc/mounts 2>/dev/null \
+                && { umount "$_t" 2>/dev/null || umount -l "$_t" 2>/dev/null || true; }
+        done
+    done
+fi
+# Verify nothing left mounted under /bedrock
+if [ -r /proc/mounts ] && awk -v p="$BR" '$2 ~ ("^" p){f=1}END{exit !f}' /proc/mounts 2>/dev/null; then
+    warn "some mounts under ${BR} could not be released."
+    warn "reboot iSH-AOK, then re-run this uninstaller to finish cleanly."
+else
+    ok "all strata unmounted"
+fi
+
+# ── 2. restore /etc/os-release ──────────────────────────────────────────
+say ""
+info "restoring /etc/os-release..."
+# Always remove a symlink first so we never write through it into /bedrock.
+[ -L /etc/os-release ] && rm -f /etc/os-release 2>/dev/null || true
+if [ -f /etc/os-release.bedrock-orig ]; then
+    cp -f /etc/os-release.bedrock-orig /etc/os-release 2>/dev/null && rm -f /etc/os-release.bedrock-orig 2>/dev/null \
+        && ok "os-release restored from backup"
+elif [ -f "${BETC}/os-release.orig" ]; then
+    cp -f "${BETC}/os-release.orig" /etc/os-release 2>/dev/null && ok "os-release restored from backup"
+else
+    # No backup. Rebuild from the init stratum.
+    _init=""
+    [ -f "${BRUN}/init_stratum" ] && _init="$(cat "${BRUN}/init_stratum" 2>/dev/null)"
+    if [ -n "$_init" ] && [ -f "${STRATA}/${_init}/etc/os-release" ]; then
+        cp -f "${STRATA}/${_init}/etc/os-release" /etc/os-release 2>/dev/null \
+            && ok "os-release rebuilt from init stratum '${_init}'"
+    elif [ -n "$_init" ]; then
+        printf 'NAME="%s"\nID=%s\nPRETTY_NAME="%s"\n' "$_init" "$_init" "$_init" > /etc/os-release 2>/dev/null \
+            && ok "os-release rebuilt (minimal) for '${_init}'"
+    else
+        printf 'NAME="Linux"\nID=linux\nPRETTY_NAME="Linux"\n' > /etc/os-release 2>/dev/null \
+            && warn "no backup or init info — wrote a generic os-release"
+    fi
+fi
+
+# ── 3. remove global brl/strat symlinks + binaries ──────────────────────
+say ""
+info "removing brl / strat commands..."
+for _bd in /usr/local/bin /usr/bin /bin /sbin /usr/sbin; do
+    for _cmd in brl strat; do
+        _p="${_bd}/${_cmd}"
+        { [ -L "$_p" ] || [ -f "$_p" ]; } && rm -f "$_p" 2>/dev/null && ok "removed ${_p}"
+    done
+done
+
+# ── 4. shell integration ────────────────────────────────────────────────
+say ""
+info "removing shell integration..."
+rm -f /etc/profile.d/bedrock.sh 2>/dev/null && ok "removed /etc/profile.d/bedrock.sh" || true
+for _rc in /etc/bash.bashrc /etc/profile "${HOME}/.bashrc" "${HOME}/.profile" /root/.bashrc /root/.profile; do
+    [ -f "$_rc" ] || continue
+    if grep -q 'profile.d/bedrock.sh\|BEDROCK_STRATUM\|# Bedrock' "$_rc" 2>/dev/null; then
+        sed -i '/profile.d\/bedrock.sh/d; /# Bedrock Linux/d; /BEDROCK_STRATUM/d' "$_rc" 2>/dev/null \
+            && ok "cleaned $_rc" || true
+    fi
+done
+
+# ── 5. fastfetch config ─────────────────────────────────────────────────
+say ""
+info "restoring fastfetch config..."
+_ffc="${HOME}/.config/fastfetch"
+if [ -f "${_ffc}/config.jsonc.bedrock-bak" ]; then
+    mv -f "${_ffc}/config.jsonc.bedrock-bak" "${_ffc}/config.jsonc" 2>/dev/null && ok "fastfetch config restored"
+elif [ -f "${_ffc}/config.jsonc" ]; then
+    # only remove if it's ours (references /bedrock/bin helpers)
+    if grep -q '/bedrock/bin/brl-' "${_ffc}/config.jsonc" 2>/dev/null; then
+        rm -f "${_ffc}/config.jsonc" 2>/dev/null && ok "removed Bedrock fastfetch config"
+    else
+        info "left existing fastfetch config untouched (not Bedrock's)"
+    fi
+fi
+
+# ── 6. decide on strata ─────────────────────────────────────────────────
+say ""
+_remove_strata=0
+if [ "$PURGE" = "1" ]; then
+    _remove_strata=1
+elif [ "$KEEP_STRATA" = "1" ]; then
+    _remove_strata=0
+elif [ -d "$STRATA" ] && [ -n "$(ls -A "$STRATA" 2>/dev/null)" ]; then
+    _cnt="$(ls -1 "$STRATA" 2>/dev/null | wc -l | tr -d ' ')"
+    _sz="$(du -sh "$STRATA" 2>/dev/null | cut -f1)"
+    say "You have ${B}${_cnt}${Z} fetched strata (${_sz:-unknown size}) at ${STRATA}."
+    printf "Delete them too? [y/N] "
+    read -r _sc; case "$_sc" in y|Y) _remove_strata=1 ;; *) _remove_strata=0 ;; esac
+fi
+
+# ── 7. remove /bedrock ──────────────────────────────────────────────────
+say ""
+info "removing Bedrock files..."
+if [ "$_remove_strata" = "1" ]; then
+    # Safety: refuse if anything is still mounted underneath.
+    if [ -r /proc/mounts ] && awk -v p="$BR" '$2 ~ ("^" p){f=1}END{exit !f}' /proc/mounts 2>/dev/null; then
+        err "mounts still active under ${BR}; NOT deleting to avoid damage."
+        err "reboot iSH-AOK and re-run: ./brl-uninstall --purge"
+        exit 1
+    fi
+    rm -rf "$BR" 2>/dev/null && ok "removed ${BR} entirely (including strata)" \
+        || { err "could not fully remove ${BR}"; exit 1; }
+else
+    # Keep strata: remove everything except the strata dir.
+    for _item in "$BR"/*; do
+        [ -e "$_item" ] || continue
+        case "$_item" in "$STRATA") continue ;; esac
+        rm -rf "$_item" 2>/dev/null || true
+    done
+    ok "removed Bedrock core; kept ${STRATA}"
+    say "  ${B}Your strata are preserved at ${STRATA}.${Z}"
+fi
+
+# ── done ────────────────────────────────────────────────────────────────
+say ""
+ok "${B}Bedrock Linux uninstalled.${Z}"
+say "  os-release now reports: $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown}")"
+say "  Open a new shell (or run: exec \$SHELL) for changes to take effect."
+say ""
