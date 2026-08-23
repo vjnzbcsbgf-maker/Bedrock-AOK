@@ -1,7 +1,11 @@
 # Bedrock Linux for iSH-AOK
 
 <p align="center">
-  <img src="docs/bedrock-banner.jpg" alt="Bedrock Linux 0.7.31 Poki (iSH-AOK)" width="700">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/bedrock-banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/bedrock-banner-light.svg">
+    <img src="docs/bedrock-banner-dark.svg" alt="Bedrock Linux 0.7.31 Poki (iSH-AOK)" width="700">
+  </picture>
 </p>
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
