@@ -3,7 +3,7 @@
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![POSIX Shell](https://img.shields.io/badge/Language-POSIX_Shell-4EAA25.svg)](#)
 [![Platform: iOS | iPadOS](https://img.shields.io/badge/Platform-iOS_|_iPadOS-000000.svg?logo=apple&logoColor=white)](https://github.com/emkey1/AOK-Filesystem-Tools)
-[![Version: 0.7.31 Poki](https://img.shields.io/badge/Version-0.7.31_Poki-E95420.svg)](#)
+[![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-E95420.svg)](#)
 [![Strata: 29 distros](https://img.shields.io/badge/Strata-29_Distributions-2ea44f.svg)](#supported-distributions)
 [![Status: In Development](https://img.shields.io/badge/Status-In_Development-FFDD57.svg?labelColor=555)](#development-status)
 [![Arch: aarch64](https://img.shields.io/badge/Arch-aarch64-lightgrey.svg)](#)
@@ -14,7 +14,7 @@
 >
 > **[Website](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/)** · **[Forum](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/#forum)** · **[Releases](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/#releases)** · **[GitHub](https://github.com/vjnzbcsbgf-maker/Bedrock-AOK)**
 
-Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) 0.7.31 Poki for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
+Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
 
 Each distribution lives in its own **stratum**: an isolated root filesystem that shares the host's kernel, network, and device tree. Commands installed in any stratum are automatically wired into a unified `PATH` so you can mix packages freely across distros.
 
@@ -64,17 +64,18 @@ Each distribution lives in its own **stratum**: an isolated root filesystem that
 
 ### Editions & Lifecycle
 
-- **Three editions** — non-permanent (`brl`), permanent (`brl-permanent`), and integrated (`bedrockport.sh`)
-- **Clean uninstaller** — the permanent edition ships a dedicated `brl-uninstall` script that fully restores the host
+- **Five editions** — non-permanent (`brl`), permanent (`brl-permanent`), permanent-integrated (`brl-permanent-integrated`), permanent-all (`brl-permanent-all`), and unified installer (`bedrockport.sh`)
+- **Full integration layer** — all editions now include capability detection, structured logging, and the integration functions
+- **Clean uninstaller** — all permanent editions ship a dedicated `brl-uninstall` script that fully restores the host
 
-### Integration Layer (`bedrockport.sh`)
+### Integration Layer (all editions)
 
 - **Runtime capability detection** — probes what the iSH-AOK kernel actually supports (namespaces, cgroups, filesystems) and adapts
 - **Self-test suite** — `brl test` runs a full regression suite covering environment, structure, namespaces, and strat round-trips
 - **Health checks with auto-repair** — `brl health` verifies each stratum can exec and auto-repairs broken ones
 - **Integrity verification** — `brl verify` checks the Bedrock directory structure with optional `--repair`
 - **Rollback points** — snapshot and restore Bedrock configuration to undo bad changes
-- **systemd boot integration** — optional init service and target so `/bedrock` comes up at boot without touching PID 1
+- **systemd boot integration** — optional init service and target so `/bedrock` comes up at boot without touching PID 1 (integrated/all/unified editions)
 - **AOK roots registration** — auto-discovers `/AOK/roots` and registers them as Bedrock strata
 - **Structured logging** — journald when available, file fallback at `/bedrock/var/log/bedrock.log`
 
@@ -121,11 +122,15 @@ Three lines. You now have Alpine Linux running as a stratum inside iSH-AOK.
 
 ### Choosing an Edition
 
-| Edition | Script | Persists across reboots | Integration layer | Uninstall |
-|:---|:---|:---:|:---:|:---|
-| **Non-Permanent** | `brl` | No | — | `brl unhijack` |
-| **Permanent** | `brl-permanent` | Yes | — | `brl-uninstall` |
-| **Integrated** | `bedrockport.sh` | Yes | Full | `brl-uninstall` |
+| Edition | Script | Persists | Integration | Boot Integration | Uninstall |
+|:---|:---|:---:|:---:|:---:|:---|
+| **Non-Permanent** | `brl` | No | Yes | — | `brl unhijack` |
+| **Permanent** | `brl-permanent` | Yes | Yes | — | `brl-uninstall` |
+| **Permanent Integrated** | `brl-permanent-integrated` | Yes | Yes | systemd | `brl-uninstall` |
+| **Permanent All** | `brl-permanent-all` | Yes | Yes | Full | `brl-uninstall` |
+| **Unified Installer** | `bedrockport.sh` | Yes | Yes | Full | `brl-uninstall` |
+
+All editions now include the integration layer (capability detection, AOK roots registration, structured logging).
 
 #### Non-Permanent Edition
 
@@ -145,14 +150,32 @@ chmod +x brl-permanent
 
 Survives reboots. Use the dedicated `brl-uninstall` script to remove.
 
-#### Integrated Edition
+#### Permanent Integrated Edition
+
+```sh
+chmod +x brl-permanent-integrated
+./brl-permanent-integrated hijack
+```
+
+Everything in the permanent edition plus systemd boot integration, AOK roots registration, health checks, and rollback.
+
+#### Permanent All Edition
+
+```sh
+chmod +x brl-permanent-all
+./brl-permanent-all hijack
+```
+
+Maximum integration. All features enabled including full capability suite and structured logging.
+
+#### Unified Installer (Recommended)
 
 ```sh
 chmod +x bedrockport.sh
 ./bedrockport.sh --hijack
 ```
 
-Unified script combining `brl` + `strat` + installer. Includes everything in the permanent edition plus: capability detection, self-tests, health checks, rollback, systemd boot integration, AOK roots registration, and structured logging. Also supports `--update` and `--restat`.
+Single-file deployment combining `brl` + `strat` + installer. All integration features. Supports `--hijack`, `--update`, `--force-update`, and `--restat`.
 
 ---
 
@@ -209,9 +232,9 @@ brl tutorial             # Quick-start tutorial
 brl version              # Show version
 ```
 
-### Integrated Edition Commands
+### Advanced Commands
 
-Available only in `bedrockport.sh`:
+Available in all editions (some features require integrated/all/unified editions):
 
 ```sh
 brl capabilities [--json]       # Show detected iSH-AOK kernel capabilities
@@ -267,7 +290,7 @@ brl register-aok                # Discover and register /AOK/roots as strata
 
 | Aspect | Upstream Bedrock Linux | Bedrock-AOK |
 |:---|:---|:---|
-| **Language** | C + custom kernel module | Pure POSIX shell (~1900 lines) |
+| **Language** | C + custom kernel module | Pure POSIX shell |
 | **Isolation** | Kernel namespaces, FUSE, xattrs | `chroot` + bind mounts |
 | **Cross-filesystem** | FUSE-based `crossfs` | Shell shim scripts in `/bedrock/cross/bin/` |
 | **Target platform** | Bare-metal / VM x86_64 | iSH-AOK aarch64 on iOS |
@@ -280,9 +303,9 @@ brl register-aok                # Discover and register /AOK/roots as strata
 
 ## Uninstalling
 
-### Permanent / Integrated Edition
+### Permanent Editions
 
-The permanent and integrated editions ship a dedicated uninstaller:
+All permanent editions ship a dedicated uninstaller:
 
 ```sh
 ./brl-uninstall                # Interactive — asks about keeping strata

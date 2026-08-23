@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bedrock-AOK &mdash; Bedrock Linux for iSH-AOK</title>
   <meta name="description" content="Run 29+ Linux distributions simultaneously on iOS through iSH-AOK. A Bedrock Linux port using chroot-based strata.">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,7 +13,16 @@
 <nav class="nav">
   <div class="nav-inner">
     <span class="nav-logo" onclick="showTab('home')">
-      <span class="n-rock">Bedrock</span><span class="n-dash">-</span><span class="n-aok">AOK</span>
+      <span class="n-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path d="M12 2L2 19h20L12 2z" fill="#c4a574" opacity="0.15"/>
+          <path d="M12 2L2 19h20L12 2z" stroke="#c4a574" stroke-width="1.5" stroke-linejoin="round" fill="none"/>
+          <path d="M7 14h10" stroke="#c4a574" stroke-width="1" opacity="0.5"/>
+          <path d="M5 17h14" stroke="#c4a574" stroke-width="1" opacity="0.35"/>
+          <path d="M9.5 10.5h5" stroke="#c4a574" stroke-width="1" opacity="0.65"/>
+        </svg>
+      </span>
+      <span><span class="n-rock">Bedrock</span><span class="n-dash">-</span><span class="n-aok">AOK</span></span>
     </span>
     <button class="nav-mobile" onclick="document.querySelector('.nav-tabs').classList.toggle('open')" aria-label="Menu">&#9776;</button>
     <div class="nav-tabs" id="navTabs">
@@ -21,7 +30,7 @@
       <button data-tab="forum" onclick="showTab('forum')">Forum</button>
       <button data-tab="releases" onclick="showTab('releases')">Releases</button>
       <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK" target="_blank" rel="noopener">
-        GitHub <svg viewBox="0 0 12 12" width="12" height="12" stroke="currentColor" fill="none"><path d="M3.5 2h6.5v6.5M9.5 2.5l-7 7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        GitHub <svg viewBox="0 0 12 12" width="11" height="11" stroke="currentColor" fill="none"><path d="M3.5 2h6.5v6.5M9.5 2.5l-7 7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </a>
     </div>
   </div>
@@ -32,29 +41,52 @@
 <div class="wrap">
 
   <section class="hero">
-    <div class="hero-art" aria-hidden="true"><span class="rock"> ____           _                 _
-| __ )  ___  __| |_ __ ___   ___| | __
-|  _ \ / _ \/ _` | '__/ _ \ / __| |/ /
-| |_) |  __/ (_| | | | (_) | (__|   &lt;
-|____/ \___|\__,_|_|  \___/ \___|_|\_\</span>
-<span class="fork">              _    ___  _  __
-             / \  / _ \| |/ /
-            / _ \| | | | ' /
-           / ___ \ |_| | . \
-          /_/   \_\___/|_|\_\</span></div>
+    <div class="hero-logo">
+      <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="rockGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#d4b888"/>
+            <stop offset="100%" stop-color="#a08656"/>
+          </linearGradient>
+          <linearGradient id="glowGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#c4a574" stop-opacity="0.2"/>
+            <stop offset="100%" stop-color="#c4a574" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <!-- Glow backdrop -->
+        <ellipse cx="60" cy="95" rx="45" ry="8" fill="url(#glowGrad)"/>
+        <!-- Rock body - layered strata shape -->
+        <polygon points="60,12 18,78 30,88 60,72 90,88 102,78" fill="url(#rockGrad)" opacity="0.12"/>
+        <polygon points="60,12 18,78 30,88 60,72 90,88 102,78" stroke="url(#rockGrad)" stroke-width="2" stroke-linejoin="round" fill="none"/>
+        <!-- Strata lines -->
+        <line x1="32" y1="58" x2="88" y2="58" stroke="#c4a574" stroke-width="1" opacity="0.3"/>
+        <line x1="27" y1="68" x2="93" y2="68" stroke="#c4a574" stroke-width="1" opacity="0.25"/>
+        <line x1="37" y1="48" x2="83" y2="48" stroke="#c4a574" stroke-width="1" opacity="0.35"/>
+        <line x1="44" y1="38" x2="76" y2="38" stroke="#c4a574" stroke-width="1" opacity="0.4"/>
+        <!-- Inner facet -->
+        <line x1="60" y1="12" x2="60" y2="72" stroke="#c4a574" stroke-width="0.75" opacity="0.15"/>
+        <!-- Base -->
+        <line x1="22" y1="82" x2="98" y2="82" stroke="#c4a574" stroke-width="1.5" opacity="0.2" stroke-linecap="round"/>
+        <!-- AOK mark -->
+        <circle cx="60" cy="92" r="3" fill="#6ec97e" opacity="0.6"/>
+      </svg>
+    </div>
 
     <h1 class="hero-h1">
       <span class="h-rock">Bedrock</span><span class="h-mid"> Linux </span><span class="h-aok">-AOK</span>
     </h1>
     <p class="hero-tagline">Run <strong>29 Linux distributions</strong> simultaneously on iOS through iSH-AOK. Mix and match packages across distros with chroot-based strata.</p>
 
-    <div class="badges">
-      <img src="https://img.shields.io/badge/platform-iSH--AOK-24292f?style=flat-square" alt="Platform: iSH-AOK">
-      <img src="https://img.shields.io/badge/license-GPLv2-3572a5?style=flat-square" alt="License: GPLv2">
-      <img src="https://img.shields.io/badge/strata-29_distros-2ea44f?style=flat-square" alt="29 Distros">
-      <img src="https://img.shields.io/badge/arch-aarch64-7b42bc?style=flat-square" alt="Arch: aarch64">
-      <img src="https://img.shields.io/badge/status-active_dev-c98b1d?style=flat-square" alt="Active Development">
-      <img src="https://img.shields.io/badge/version-0.7.31_Poki-bc4a3c?style=flat-square" alt="Version: 0.7.31 Poki">
+    <div class="hero-meta">
+      <span>v<span class="val">1.1.0</span></span>
+      <span class="dot">&middot;</span>
+      <span>GPLv2</span>
+      <span class="dot">&middot;</span>
+      <span>aarch64</span>
+      <span class="dot">&middot;</span>
+      <span><span class="val">5</span> editions</span>
+      <span class="dot">&middot;</span>
+      <span><span class="val">29</span> distros</span>
     </div>
 
     <div class="hero-ctas">
@@ -72,8 +104,8 @@
         <p>Alpine, Debian, Ubuntu, Fedora, Arch, Kali, Gentoo, Void, openSUSE, and 20 more &mdash; all running side by side.</p>
       </div>
       <div class="feat">
-        <h3>Three Editions</h3>
-        <p>Non-permanent, permanent, or fully integrated with health checks, rollback, and boot integration.</p>
+        <h3>Five Editions</h3>
+        <p>Non-permanent, permanent, permanent-integrated, permanent-all, and unified installer. Choose the right level of integration.</p>
       </div>
       <div class="feat">
         <h3>Capability Detection</h3>
@@ -96,7 +128,7 @@
 
   <section class="sec">
     <h2 class="sec-head">Editions</h2>
-    <p class="sec-sub">Choose the right edition for your setup.</p>
+    <p class="sec-sub">Choose the right edition for your setup. All editions now include the integration layer.</p>
     <div class="ed-grid">
       <div class="ed-card">
         <div class="ed-name">Non-Permanent</div>
@@ -104,9 +136,9 @@
         <ul class="ed-feat-list">
           <li>Full stratum management</li>
           <li>Cross-distro commands</li>
+          <li>Integration layer</li>
           <li>Reversible with unhijack</li>
           <li class="no">Does not persist across reboots</li>
-          <li class="no">No integration layer</li>
         </ul>
       </div>
       <div class="ed-card">
@@ -115,23 +147,46 @@
         <ul class="ed-feat-list">
           <li>Full stratum management</li>
           <li>Cross-distro commands</li>
+          <li>Integration layer</li>
           <li>Survives reboots</li>
           <li>Dedicated uninstaller</li>
-          <li class="no">No integration layer</li>
+        </ul>
+      </div>
+      <div class="ed-card">
+        <div class="ed-name">Permanent Integrated</div>
+        <div class="ed-file">brl-permanent-integrated</div>
+        <ul class="ed-feat-list">
+          <li>Everything in Permanent</li>
+          <li>systemd boot integration</li>
+          <li>AOK roots registration</li>
+          <li>Health checks &amp; rollback</li>
+          <li>Self-test suite</li>
+        </ul>
+      </div>
+      <div class="ed-card">
+        <div class="ed-name">Permanent All</div>
+        <div class="ed-file">brl-permanent-all</div>
+        <ul class="ed-feat-list">
+          <li>Everything in Integrated</li>
+          <li>All features enabled</li>
+          <li>Maximum integration</li>
+          <li>Full capability suite</li>
+          <li>Structured logging</li>
         </ul>
       </div>
       <div class="ed-card recommended">
-        <div class="ed-name">Integrated</div>
+        <div class="ed-name">Unified Installer</div>
         <div class="ed-file">bedrockport.sh</div>
         <ul class="ed-feat-list">
-          <li>Everything in Permanent</li>
-          <li>Capability detection</li>
-          <li>Self-test suite</li>
-          <li>Health checks &amp; rollback</li>
-          <li>systemd boot integration</li>
+          <li>Combined brl + strat + installer</li>
+          <li>--hijack / --update / --restat</li>
+          <li>All integration features</li>
+          <li>Single-file deployment</li>
+          <li>Recommended for new installs</li>
         </ul>
       </div>
     </div>
+    <div class="ed-note">All permanent editions use <code>brl-uninstall</code> for removal. The non-permanent edition supports <code>brl unhijack</code>.</div>
   </section>
 
   <section class="sec">
@@ -154,7 +209,7 @@
   <section class="sec">
     <h2 class="sec-head">Quick Start</h2>
     <p class="sec-sub">Get running in under a minute.</p>
-    <div class="codeblock"><span class="cm"># Download the integrated edition</span>
+    <div class="codeblock"><span class="cm"># Download the unified installer</span>
 <span class="kw">wget</span> <span class="pr">https://raw.githubusercontent.com/vjnzbcsbgf-maker/Bedrock-AOK/main/bedrockport.sh</span>
 <span class="kw">chmod</span> +x bedrockport.sh
 
@@ -205,9 +260,7 @@
   </section>
 
   <section class="sec">
-    <div id="giscus-container">
-      <!-- Giscus widget loads here -->
-    </div>
+    <div id="giscus-container"></div>
 
     <div class="forum-links">
       <a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/discussions/new?category=general" class="forum-link" target="_blank" rel="noopener">
@@ -234,9 +287,9 @@
 
   <section class="sec">
     <h2 class="sec-head">Releases</h2>
-    <p class="sec-sub">Download Bedrock-AOK. Only repository owners can publish releases.</p>
+    <p class="sec-sub">Download Bedrock-AOK. Each release includes all five edition scripts.</p>
 
-    <div class="rel-note">Releases are published on GitHub by the project maintainers. Each release includes the three edition scripts ready to download.</div>
+    <div class="rel-note">Releases are published on GitHub by the project maintainers.</div>
 
     <div id="relList">
       <div class="loading" id="relLoading">
@@ -263,7 +316,6 @@
 </footer>
 
 <script>
-// Tab navigation
 function showTab(t) {
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('visible'); });
   document.getElementById('page-' + t).classList.add('visible');
@@ -281,7 +333,6 @@ function showTab(t) {
   }
 }
 
-// Giscus integration
 function loadGiscus() {
   window._giscusLoaded = true;
   var container = document.getElementById('giscus-container');
@@ -305,7 +356,6 @@ function loadGiscus() {
   container.appendChild(script);
 }
 
-// GitHub Releases API
 function loadReleases() {
   window._relLoaded = true;
   var container = document.getElementById('relList');
@@ -319,15 +369,19 @@ function loadReleases() {
       if (!releases || !releases.length || releases.message) {
         container.innerHTML =
           '<div class="rel-card">' +
-          '<div class="rel-head"><div><span class="rel-ver">v0.7.31</span> <span class="rel-latest">Latest</span></div>' +
+          '<div class="rel-head"><div><span class="rel-ver">v1.1.0</span> <span class="rel-latest">Latest</span></div>' +
           '<span class="rel-date">August 2026</span></div>' +
-          '<div class="rel-name">Poki &mdash; Initial Public Release</div>' +
-          '<div class="rel-body"><p>First public release of Bedrock-AOK for iSH-AOK (aarch64/iOS).</p>' +
-          '<ul><li>29 Linux distributions</li><li>Three editions</li><li>Capability detection</li><li>Health checks and rollback</li></ul></div>' +
+          '<div class="rel-name">v1.1.0 &mdash; Five Editions Release</div>' +
+          '<div class="rel-body"><p>Major release of Bedrock-AOK for iSH-AOK (aarch64/iOS).</p>' +
+          '<ul><li>Five editions with full integration layer</li><li>29 Linux distributions</li>' +
+          '<li>Capability detection &amp; health checks</li><li>systemd boot integration</li>' +
+          '<li>Dedicated uninstaller</li></ul></div>' +
           '<div class="rel-assets"><div class="rel-assets-head">Assets</div>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/bedrockport.sh" class="rel-dl" target="_blank">bedrockport.sh</a>' +
-          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent" class="rel-dl" target="_blank">brl-permanent</a>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl" class="rel-dl" target="_blank">brl</a>' +
+          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent" class="rel-dl" target="_blank">brl-permanent</a>' +
+          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent-integrated" class="rel-dl" target="_blank">brl-permanent-integrated</a>' +
+          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent-all" class="rel-dl" target="_blank">brl-permanent-all</a>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-uninstall" class="rel-dl" target="_blank">brl-uninstall</a>' +
           '</div></div>';
         return;

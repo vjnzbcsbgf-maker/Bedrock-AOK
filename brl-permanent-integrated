@@ -27,7 +27,7 @@ RELEASE_FILE="${BETC}/bedrock-release"
 URLCACHE="${BETC}/urls.cache"
 BEDROCK_VERSION="0.7.31"
 BEDROCK_CODENAME="Poki"
-PORT_TAG="iSH-AOK"
+PORT_TAG="iSH-AOK-integrated"
 LXC="https://images.linuxcontainers.org/images"
 
 ESC=$(printf '\033')
@@ -1387,25 +1387,7 @@ PD
     notice "Add a stratum: ${color_cmd}brl fetch alpine${color_norm}"
     say ""
 }
-brl_unhijack() {
-    need_root; say ""; step_init 3
-    step "Releasing mounts"; cmd_umount >/dev/null 2>&1 || true
-    step "Restoring os-release"
-    if [ -f "${BETC}/os-release.orig" ]; then cp -f "${BETC}/os-release.orig" /etc/os-release 2>/dev/null && notice "os-release restored"
-    elif [ -f /etc/os-release.bedrock-orig ]; then cp -f /etc/os-release.bedrock-orig /etc/os-release 2>/dev/null && notice "os-release restored"
-    else [ -L /etc/os-release ] && rm -f /etc/os-release 2>/dev/null || true; warn "no backup"; fi
-    rm -f /etc/profile.d/bedrock.sh /etc/systemd/system.conf.d/00-bedrock.conf 2>/dev/null || true
-    for _ur in /etc/bash.bashrc "${HOME}/.bashrc" "${HOME}/.profile"; do [ -f "$_ur" ] && sed -i "/profile.d\/bedrock.sh/d" "$_ur" 2>/dev/null || true; done
-    [ -f "${HOME}/.config/fastfetch/config.jsonc.bedrock-bak" ] && mv -f "${HOME}/.config/fastfetch/config.jsonc.bedrock-bak" "${HOME}/.config/fastfetch/config.jsonc" 2>/dev/null || rm -f "${HOME}/.config/fastfetch/config.jsonc" 2>/dev/null || true
-    for _ub in /usr/local/bin /usr/bin; do [ -L "${_ub}/brl" ] && rm -f "${_ub}/brl"; [ -L "${_ub}/strat" ] && rm -f "${_ub}/strat"; done
-    for _u in bedrock-init.service bedrock.target bedrock-stratum@.service; do
-        has systemctl && systemctl disable "$_u" 2>/dev/null || true
-        rm -f "/etc/systemd/system/${_u}" 2>/dev/null || true
-    done
-    has systemctl && systemctl daemon-reload 2>/dev/null || true
-    step "Finalizing"
-    notice "Hijack reverted (strata under ${STRATA} are untouched)"; say ""
-}
+brl_unhijack() { die "permanent installation — use the brl-uninstall script to fully remove."; }
 _install_ff() {
     _write_helpers
     _fc="${HOME}/.config/fastfetch"; mkdir -p "$_fc"

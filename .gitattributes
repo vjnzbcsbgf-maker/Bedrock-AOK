@@ -1,4 +1,6 @@
 brl linguist-language=Shell
 brl-permanent linguist-language=Shell
+brl-permanent-integrated linguist-language=Shell
+brl-permanent-all linguist-language=Shell
 brl-uninstall linguist-language=Shell
 bedrockport.sh linguist-language=Shell

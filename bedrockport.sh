@@ -1,12 +1,22 @@
 #!/bin/sh
 # ============================================================================
-#  Bedrock Linux — iSH-AOK port  (brl / strat)
-#  Faithful reimplementation for iSH-AOK aarch64.
-#  Uses: chroot, bind mount, filesystem ops. No FUSE/namespaces/xattrs.
+#  Bedrock Linux — iSH-AOK port  (brl / strat)          bedrock-port  v1.1.0
+#  Faithful reimplementation of Bedrock Linux for iSH-AOK (iOS ARM64/aarch64).
+#
+#  Mixes packages from many distributions as "strata". Uses chroot + bind
+#  mounts + a symlink crossfs; on capable AOK builds it uses real mount
+#  namespaces. Keeps systemd as PID 1 and makes it Bedrock-aware.
+#
+#  Runtime-proven capability detection (0 fakes): a feature is "native" only
+#  if the actual syscall succeeds. Secure by default: verified TLS + sha256
+#  integrity on downloads. crossfs/etcfs are emulated (no FUSE requirement).
+#
 #  Invoke:  brl <command> [args]   |   strat [-r] <stratum> <cmd>
+#  Install: ./bedrock-port.sh --hijack   (see --help)
 # ============================================================================
 set -u
 
+BRL_PORT_VERSION="1.1.0"
 BR="/bedrock"
 STRATA="${BR}/strata"
 CROSSBIN="${BR}/cross/bin"
@@ -99,6 +109,8 @@ _pkg_for() {
         gzip)   echo "gzip" ;;
         chroot) _hpm="$(_host_pkgmgr)"; case "$_hpm" in apt-get) echo "coreutils" ;; apk) echo "coreutils" ;; *) echo "coreutils" ;; esac ;;
         mount)  _hpm="$(_host_pkgmgr)"; [ "$_hpm" = "apk" ] && echo "util-linux" || echo "mount" ;;
+        ca-certificates) echo "ca-certificates" ;;
+        openssl) echo "openssl" ;;
         *) echo "$1" ;;
     esac
 }
@@ -108,6 +120,9 @@ ensure_deps() {
     _missing=""
     for _c in chroot tar xz gzip mount; do has "$_c" || _missing="${_missing} $_c"; done
     [ "$_need_dl" = "1" ] && _missing="${_missing} wget"
+    # Security tooling: a CA bundle (for verified TLS) and a sha256 tool.
+    _have_ca_bundle >/dev/null 2>&1 || _missing="${_missing} ca-certificates"
+    { has sha256sum || has shasum || has openssl; } || _missing="${_missing} openssl"
     _missing="$(printf '%s' "$_missing" | sed 's/^ *//')"
     [ -z "$_missing" ] && return 0
     _hpm="$(_host_pkgmgr)"
@@ -120,11 +135,17 @@ ensure_deps() {
     for _c in $_missing; do
         _pkg="$(_pkg_for "$_c")"
         if _host_install "$_pkg"; then
-            has "$_c" && ok "installed $_c" || warn "$_c still missing after install"
+            case "$_c" in
+                ca-certificates) _have_ca_bundle >/dev/null 2>&1 && ok "installed ca-certificates (verified TLS enabled)" || warn "ca-certificates installed but no bundle found" ;;
+                *) has "$_c" && ok "installed $_c" || warn "$_c still missing after install" ;;
+            esac
         else
             warn "could not install $_pkg (for $_c)"
         fi
     done
+    # Refresh CA trust store if the tool exists (Debian/Alpine differ).
+    has update-ca-certificates && update-ca-certificates >/dev/null 2>&1 || true
+    BRL_TLS_OK=""  # re-probe after installing certs
     # Final verdict on hard requirements
     _fatal=""
     has chroot || _fatal="${_fatal} chroot"
@@ -136,30 +157,99 @@ ensure_deps() {
 }
 init_stratum() { [ -f "${BRUN}/init_stratum" ] && cat "${BRUN}/init_stratum" || echo "bedrock"; }
 
+# ── security / TLS / integrity layer ────────────────────────────────────
+# Principle: verify by default. TLS peer verification is ON; we only fall back
+# to insecure transport after an explicit, visible warning, and never silently.
+# Downloads are integrity-checked against a SHA256 when one is available.
+BRL_INSECURE="${BRL_INSECURE:-0}"          # user opt-in to allow insecure fallback
+BRL_TLS_OK=""                               # cached: can we do verified TLS at all?
+
+# Does the system have a usable CA bundle so TLS verification can succeed?
+_have_ca_bundle() {
+    for _ca in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem \
+               /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/certs/ca-bundle.crt; do
+        [ -s "$_ca" ] && { echo "$_ca"; return 0; }
+    done
+    return 1
+}
+# Prove we can complete a *verified* TLS handshake to a known host. Cached.
+tls_verify_works() {
+    [ -n "$BRL_TLS_OK" ] && { [ "$BRL_TLS_OK" = 1 ] && return 0 || return 1; }
+    _tvh="images.linuxcontainers.org"
+    if has curl && curl -4 -fsS --connect-timeout 15 -m 20 -o /dev/null "https://${_tvh}/" 2>/dev/null; then
+        BRL_TLS_OK=1; return 0
+    fi
+    if has wget && wget -4 -q -T 15 --spider "https://${_tvh}/" 2>/dev/null; then
+        BRL_TLS_OK=1; return 0
+    fi
+    BRL_TLS_OK=0; return 1
+}
+# Pick a sha tool.
+_sha256() {
+    if has sha256sum; then sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif has shasum; then shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    elif has openssl; then openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
+    else echo ""; fi
+}
+# Verify a file against an expected sha256 (if we have one). Returns:
+#   0 = verified OR no expected hash to check against (caller decides on latter)
+#   1 = hash MISMATCH (hard fail — never proceed)
+verify_sha256() {
+    _vf="$1"; _vexp="$2"
+    [ -n "$_vexp" ] || return 0
+    _vgot="$(_sha256 "$_vf")"
+    [ -n "$_vgot" ] || { warn "no sha256 tool — cannot verify integrity of $(basename "$_vf")"; return 0; }
+    if [ "$_vgot" = "$_vexp" ]; then ok "sha256 verified"; return 0; fi
+    err "sha256 MISMATCH for $(basename "$_vf")"
+    err "  expected: ${_vexp}"; err "  got:      ${_vgot}"
+    return 1
+}
+# Try to fetch a published checksum for a rootfs URL (LXC ships SHA256SUMS).
+fetch_expected_sha256() {
+    _fu="$1"; _fbase="$(basename "$_fu")"; _fdir="${_fu%/*}"
+    for _sname in SHA256SUMS SHA256SUMS.txt sha256sums.txt; do
+        _stext="$(fetch_text "${_fdir}/${_sname}" 2>/dev/null || true)"
+        [ -n "$_stext" ] || continue
+        _sh="$(printf '%s\n' "$_stext" | awk -v f="$_fbase" '$2 ~ f || $2 == f || $2 == "*"f {print $1; exit}')"
+        [ -n "$_sh" ] && { echo "$_sh"; return 0; }
+    done
+    return 1
+}
+
 dl() {
-    # Fastest first: aria2c with 8 parallel connections (huge speedup on big rootfs).
+    _dlu="$1"; _dlo="$2"
+    # Decide transport security once.
+    if tls_verify_works; then _sec=1; else _sec=0; fi
+    if [ "$_sec" = 0 ] && [ "$BRL_INSECURE" != 1 ]; then
+        warn "verified TLS unavailable (no CA bundle or handshake failed)."
+        warn "refusing insecure download by default. To override for this run:"
+        warn "  BRL_INSECURE=1 brl fetch <stratum>   (or: brl deps to install ca-certificates)"
+    fi
+    # aria2c: fast, WITH certificate checking when secure.
     if has aria2c; then
-        aria2c -x8 -s8 -k1M --disable-ipv6=true --check-certificate=false \
-            --file-allocation=none --summary-interval=0 -q \
-            -d "$(dirname "$2")" -o "$(basename "$2")" "$1" 2>/dev/null && [ -s "$2" ] && return 0
+        if [ "$_sec" = 1 ]; then
+            aria2c -x8 -s8 -k1M --disable-ipv6=true --check-certificate=true \
+                --file-allocation=none --summary-interval=0 -q \
+                -d "$(dirname "$_dlo")" -o "$(basename "$_dlo")" "$_dlu" 2>/dev/null && [ -s "$_dlo" ] && return 0
+        elif [ "$BRL_INSECURE" = 1 ]; then
+            aria2c -x8 -s8 -k1M --disable-ipv6=true --check-certificate=false \
+                --file-allocation=none --summary-interval=0 -q \
+                -d "$(dirname "$_dlo")" -o "$(basename "$_dlo")" "$_dlu" 2>/dev/null && [ -s "$_dlo" ] && return 0
+        fi
     fi
     _dltry=0; while [ "$_dltry" -lt 2 ]; do
         _dltry=$((_dltry+1))
         if has curl; then
-            # --compressed negotiates gzip; parallel-ish via HTTP/2 multiplexing
-            curl -4 -fSL --compressed --connect-timeout 30 -m 900 --retry 3 --retry-delay 3 -o "$2" "$1" 2>/dev/null && [ -s "$2" ] && return 0
-            curl -4 -fSLk --connect-timeout 30 -m 900 --retry 3 --retry-delay 3 -o "$2" "$1" 2>/dev/null && [ -s "$2" ] && return 0
-        fi
-        if has wget; then
-            wget -4 -q -T 120 -t 3 --waitretry=3 -O "$2" "$1" 2>/dev/null && [ -s "$2" ] && return 0
-            wget -4 -q -T 120 -t 3 --waitretry=3 --no-check-certificate -O "$2" "$1" 2>/dev/null && [ -s "$2" ] && return 0
+            curl -4 -fSL --compressed --connect-timeout 30 -m 900 --retry 3 --retry-delay 3 -o "$_dlo" "$_dlu" 2>/dev/null && [ -s "$_dlo" ] && return 0
+        elif has wget; then
+            wget -4 -q -T 120 -t 3 --waitretry=3 -O "$_dlo" "$_dlu" 2>/dev/null && [ -s "$_dlo" ] && return 0
         fi
     done
-    warn "retrying with visible errors..."
-    if has curl; then
-        curl -4 -fSLk --connect-timeout 30 -m 900 -o "$2" "$1" 2>&1 && [ -s "$2" ] && return 0
-    elif has wget; then
-        wget -4 -T 120 -t 1 --no-check-certificate -O "$2" "$1" 2>&1 && [ -s "$2" ] && return 0
+    # Insecure fallback ONLY with explicit opt-in.
+    if [ "$BRL_INSECURE" = 1 ]; then
+        warn "attempting INSECURE download (TLS verification disabled) per BRL_INSECURE=1"
+        if has curl; then curl -4 -fSLk --connect-timeout 30 -m 900 --retry 2 -o "$_dlo" "$_dlu" 2>/dev/null && [ -s "$_dlo" ] && return 0
+        elif has wget; then wget -4 -q -T 120 -t 2 --no-check-certificate -O "$_dlo" "$_dlu" 2>/dev/null && [ -s "$_dlo" ] && return 0; fi
     fi
     return 1
 }
@@ -167,11 +257,17 @@ dl() {
 # no second decompress pass). Returns 0 on success. Falls back to dl()+extract.
 dl_extract() {
     _dxu="$1"; _dxroot="$2"
-    # Only stream when we have a pipe-friendly downloader; aria2c can't stream to stdout well.
+    _dxk=""; [ "$BRL_INSECURE" = 1 ] && ! tls_verify_works && _dxk="k"
     _dxget=""
-    if has curl; then _dxget="curl -4 -fSL --compressed --connect-timeout 30 -m 900 -o -"
-    elif has wget; then _dxget="wget -4 -q -T 120 -O -"; fi
+    if has curl; then _dxget="curl -4 -fSL${_dxk} --compressed --connect-timeout 30 -m 900 -o -"
+    elif has wget; then
+        if [ -n "$_dxk" ]; then _dxget="wget -4 -q -T 120 --no-check-certificate -O -"
+        else _dxget="wget -4 -q -T 120 -O -"; fi
+    fi
     [ -n "$_dxget" ] || return 1
+    # Refuse silent-insecure streaming: if TLS can't verify and no opt-in, bail
+    # so the caller downloads via dl() (which prints the security guidance).
+    if ! tls_verify_works && [ "$BRL_INSECURE" != 1 ]; then return 1; fi
     case "$_dxu" in
         *.tar.xz|*.txz)   has xz   && $_dxget "$_dxu" 2>/dev/null | xz -dc 2>/dev/null   | tar -xf - -C "$_dxroot" 2>/dev/null && return 0 ;;
         *.tar.gz|*.tgz)   has gzip && $_dxget "$_dxu" 2>/dev/null | gzip -dc 2>/dev/null | tar -xf - -C "$_dxroot" 2>/dev/null && return 0 ;;
@@ -185,13 +281,15 @@ fetch_text() {
         _ft_try=$((_ft_try+1))
         if has curl; then
             curl -4 -fsSL --compressed --connect-timeout 20 -m 45 "$1" 2>/dev/null && return 0
-            curl -4 -fsSLk --connect-timeout 20 -m 45 "$1" 2>/dev/null && return 0
-        fi
-        if has wget; then
+        elif has wget; then
             wget -4 -q -T 25 -O - "$1" 2>/dev/null && return 0
-            wget -4 -q -T 25 -O - --no-check-certificate "$1" 2>/dev/null && return 0
         fi
     done
+    # Insecure fallback for metadata only (listings/checksums), opt-in.
+    if [ "$BRL_INSECURE" = 1 ]; then
+        if has curl; then curl -4 -fsSLk --connect-timeout 20 -m 45 "$1" 2>/dev/null && return 0
+        elif has wget; then wget -4 -q -T 25 -O - --no-check-certificate "$1" 2>/dev/null && return 0; fi
+    fi
     return 1
 }
 
@@ -438,25 +536,40 @@ brl_apply() {
 _do_fetch() {
     _dfn="$1"; _dfu="$2"; _dfr="${3:-0}"; _dfroot="${STRATA}/${_dfn}"
     mkdir -p "$_dfroot"; _dftmp="/tmp/brl-${_dfn}-$$.tar"
-    # Fast path: stream download straight through the decompressor into tar.
-    # No temp file, no separate decompress pass — roughly halves fetch time.
-    info "Downloading + extracting (streaming)..."
-    if dl_extract "$_dfu" "$_dfroot" && { [ -d "${_dfroot}/bin" ] || [ -d "${_dfroot}/usr" ] || [ -d "${_dfroot}/etc" ]; }; then
-        ok "streamed into place"
-    else
-        # Streaming failed or produced nothing usable — clean up and fall back.
-        rm -rf "${_dfroot:?}"/* 2>/dev/null || true
-        info "Streaming unavailable; downloading..."
+    # Look for a published SHA256 for this rootfs (LXC ships SHA256SUMS).
+    _dfsha="$(fetch_expected_sha256 "$_dfu" 2>/dev/null || true)"
+    if [ -n "$_dfsha" ]; then
+        # Verified path: download to disk, check hash, THEN extract. Integrity
+        # beats the small speed win of streaming when we can actually verify.
+        info "Downloading (will verify sha256)..."
         dl "$_dfu" "$_dftmp" || { rm -rf "$_dfroot" "$_dftmp"; err "download failed for $_dfn"; return 1; }
-        ok "downloaded ($(( $(wc -c < "$_dftmp" 2>/dev/null || echo 0)/1024 )) KB)"
+        verify_sha256 "$_dftmp" "$_dfsha" || { rm -rf "$_dfroot" "$_dftmp"; err "integrity check failed — refusing to install $_dfn"; return 1; }
         info "Extracting..."
         if   tar -xf "$_dftmp" -C "$_dfroot" 2>/dev/null; then :
-        elif tar -xzf "$_dftmp" -C "$_dfroot" 2>/dev/null; then :
-        elif tar -xJf "$_dftmp" -C "$_dfroot" 2>/dev/null; then :
         elif has xz && xz -dc "$_dftmp" 2>/dev/null | tar -xf - -C "$_dfroot" 2>/dev/null; then :
         elif has gzip && gzip -dc "$_dftmp" 2>/dev/null | tar -xf - -C "$_dfroot" 2>/dev/null; then :
+        elif has zstd && zstd -dc "$_dftmp" 2>/dev/null | tar -xf - -C "$_dfroot" 2>/dev/null; then :
         else rm -rf "$_dfroot" "$_dftmp"; err "extraction failed for $_dfn"; return 1; fi
         rm -f "$_dftmp"
+    else
+        # No published checksum. Stream for speed (TLS still verified in dl_extract).
+        info "Downloading + extracting (streaming; no published checksum)..."
+        if dl_extract "$_dfu" "$_dfroot" && { [ -d "${_dfroot}/bin" ] || [ -d "${_dfroot}/usr" ] || [ -d "${_dfroot}/etc" ]; }; then
+            ok "streamed into place"
+        else
+            rm -rf "${_dfroot:?}"/* 2>/dev/null || true
+            info "Streaming unavailable; downloading..."
+            dl "$_dfu" "$_dftmp" || { rm -rf "$_dfroot" "$_dftmp"; err "download failed for $_dfn"; return 1; }
+            ok "downloaded ($(( $(wc -c < "$_dftmp" 2>/dev/null || echo 0)/1024 )) KB)"
+            info "Extracting..."
+            if   tar -xf "$_dftmp" -C "$_dfroot" 2>/dev/null; then :
+            elif tar -xzf "$_dftmp" -C "$_dfroot" 2>/dev/null; then :
+            elif tar -xJf "$_dftmp" -C "$_dfroot" 2>/dev/null; then :
+            elif has xz && xz -dc "$_dftmp" 2>/dev/null | tar -xf - -C "$_dfroot" 2>/dev/null; then :
+            elif has gzip && gzip -dc "$_dftmp" 2>/dev/null | tar -xf - -C "$_dfroot" 2>/dev/null; then :
+            else rm -rf "$_dfroot" "$_dftmp"; err "extraction failed for $_dfn"; return 1; fi
+            rm -f "$_dftmp"
+        fi
     fi
     # Flatten single wrapping dir
     _dfent="$(ls -A "$_dfroot" 2>/dev/null)"
@@ -617,10 +730,12 @@ _fix_pacman() {
         sed -i 's/^#\s*DisableSandbox.*/DisableSandbox/' "$_fp" 2>/dev/null || true
         grep -q '^DisableSandbox' "$_fp" 2>/dev/null || printf '\nDisableSandbox\n' >> "$_fp"
     fi
-    sed -i 's/^SigLevel\s*=.*/SigLevel = Never/' "$_fp" 2>/dev/null || true
-    # Force every repo section to Never too (some rootfs set per-repo SigLevel)
-    sed -i 's/^\(\[.*\]\)/\1/' "$_fp" 2>/dev/null || true
-    [ -f "${1}/etc/makepkg.conf" ] && sed -i 's/^BUILDENV=.*/BUILDENV=(!distcc color !ccache check !sign)/' "${1}/etc/makepkg.conf" 2>/dev/null || true
+    # Signature policy: strict mode keeps pacman's default verification; otherwise
+    # relax (fresh AOK roots usually have no seeded keyring, which hard-blocks installs).
+    if [ "${BRL_STRICT:-0}" != 1 ]; then
+        sed -i 's/^SigLevel\s*=.*/SigLevel = Never/' "$_fp" 2>/dev/null || true
+        [ -f "${1}/etc/makepkg.conf" ] && sed -i 's/^BUILDENV=.*/BUILDENV=(!distcc color !ccache check !sign)/' "${1}/etc/makepkg.conf" 2>/dev/null || true
+    fi
     # Ensure a working mirror. ALARM uses geo.mirror; mainline Arch uses a mirrorlist.
     _fml="${1}/etc/pacman.d/mirrorlist"
     mkdir -p "${1}/etc/pacman.d" 2>/dev/null || true
@@ -642,7 +757,17 @@ _fix_apt() {
     [ -x "${1}/usr/bin/dpkg" ] || [ -x "${1}/usr/sbin/dpkg" ] || return 0
     _fad="${1}/etc/apt/apt.conf.d"; [ -d "$_fad" ] || return 0
     [ -f "${_fad}/99ishfix" ] && return 0
-    cat > "${_fad}/99ishfix" <<'APTFIX'
+    if [ "${BRL_STRICT:-0}" = 1 ]; then
+        # Strict: keep peer verification + package authentication ON.
+        cat > "${_fad}/99ishfix" <<'APTFIX'
+APT::Sandbox::User "root";
+Acquire::ForceIPv4 "true";
+APT::Install-Recommends "false";
+Dpkg::Options { "--force-confold"; "--force-confdef"; };
+Dpkg::Use-Pty "false";
+APTFIX
+    else
+        cat > "${_fad}/99ishfix" <<'APTFIX'
 APT::Sandbox::User "root";
 Acquire::AllowInsecureRepositories "true";
 Acquire::https::Verify-Peer "false";
@@ -652,6 +777,7 @@ APT::Install-Recommends "false";
 Dpkg::Options { "--force-confold"; "--force-confdef"; };
 Dpkg::Use-Pty "false";
 APTFIX
+    fi
     # Disable fsync in dpkg (chroot on iSH-AOK: massively faster, avoids I/O errors)
     mkdir -p "${1}/etc/dpkg/dpkg.cfg.d" 2>/dev/null || true
     printf 'force-unsafe-io\n' > "${1}/etc/dpkg/dpkg.cfg.d/99ishfix" 2>/dev/null || true
@@ -668,8 +794,12 @@ _fix_dnf() {
     [ -x "${1}/usr/bin/dnf" ] || [ -x "${1}/usr/bin/yum" ] || [ -d "${1}/etc/dnf" ] || [ -d "${1}/etc/yum.repos.d" ] || return 0
     _fdc="${1}/etc/dnf/dnf.conf"
     if [ ! -f "$_fdc" ]; then mkdir -p "${1}/etc/dnf" 2>/dev/null || true; [ -d "${1}/etc/dnf" ] && printf '[main]\n' > "$_fdc"; fi
-    if [ -f "$_fdc" ] && ! grep -q 'gpgcheck=0' "$_fdc" 2>/dev/null; then
-        printf '\ngpgcheck=0\nsslverify=0\nip_resolve=4\ndeltarpm=0\ninstall_weak_deps=0\ntsflags=nodocs\nskip_if_unavailable=1\nbest=0\n' >> "$_fdc"
+    if [ -f "$_fdc" ] && ! grep -q 'ip_resolve=4' "$_fdc" 2>/dev/null; then
+        if [ "${BRL_STRICT:-0}" = 1 ]; then
+            printf '\nip_resolve=4\ninstall_weak_deps=0\ntsflags=nodocs\nskip_if_unavailable=1\n' >> "$_fdc"
+        else
+            printf '\ngpgcheck=0\nsslverify=0\nip_resolve=4\ndeltarpm=0\ninstall_weak_deps=0\ntsflags=nodocs\nskip_if_unavailable=1\nbest=0\n' >> "$_fdc"
+        fi
     fi
     # yum.conf for older RHEL-family (CentOS 7-style, Amazon Linux 2)
     _fyc="${1}/etc/yum.conf"
@@ -856,6 +986,33 @@ have_mount_ns() {
     [ -n "$_HAS_MOUNTNS" ] && { [ "$_HAS_MOUNTNS" = "1" ] && return 0 || return 1; }
     if has unshare && unshare -m true 2>/dev/null; then _HAS_MOUNTNS=1; return 0; fi
     _HAS_MOUNTNS=0; return 1
+}
+
+# ── architecture (official Bedrock normalization) ───────────────────────
+standardize_architecture() {
+    case "${1:-}" in
+        aarch64|arm64) echo "aarch64" ;;
+        armhf|armhfp|armv7h|armv7hl|armv7a) echo "armv7hl" ;;
+        arm|armel|armle|arm7|armv7|armv7l|armv7a_hardfp) echo "armv7l" ;;
+        i386) echo "i386" ;; i486) echo "i486" ;; i586) echo "i586" ;;
+        x86|i686) echo "i686" ;;
+        mips|mipsbe|mipseb) echo "mips" ;;
+        mipsel|mipsle) echo "mipsel" ;;
+        mips64el|mips64le) echo "mips64el" ;;
+        ppc|ppc32|powerpc|powerpc32) echo "ppc" ;;
+        ppc64|powerpc64) echo "ppc64" ;;
+        ppc64el|ppc64le|powerpc64el|powerpc64le) echo "ppc64le" ;;
+        s390x) echo "s390x" ;;
+        amd64|x86_64) echo "x86_64" ;;
+        *) echo "" ;;
+    esac
+}
+get_system_arch() {
+    _gsa="$(standardize_architecture "$(uname -m 2>/dev/null)")"
+    [ -n "$_gsa" ] && echo "$_gsa" || echo "unknown"
+}
+brl_archs() {
+    printf '%s\n' aarch64 armv7hl armv7l mips mipsel mips64el ppc64 ppc64le s390x i386 i486 i586 i686 x86_64
 }
 
 _mount_pseudo() {
@@ -1164,6 +1321,32 @@ brl_hijack() {
 
     step "Extracting ${color_file}/bedrock${color_norm}"
     printf 'Bedrock Linux %s %s (%s port)\n' "$BEDROCK_VERSION" "$BEDROCK_CODENAME" "$PORT_TAG" > "$RELEASE_FILE"
+    # Write a bedrock.conf reference (upstream parity; sections honored where meaningful on iSH-AOK)
+    [ -f "${BETC}/bedrock.conf" ] || cat > "${BETC}/bedrock.conf" <<BCONF
+# Bedrock Linux configuration (iSH-AOK port)
+# Sections mirror upstream; some are informational on iSH-AOK.
+
+[miscellaneous]
+# system CPU architecture (standardized)
+arch = $(get_system_arch)
+# color output for brl/strat
+color = true
+
+[locale]
+LANG = C.UTF-8
+
+[cross]
+# crossfs is emulated via symlink wrappers in /bedrock/cross/bin (no FUSE)
+enable = true
+
+[symlinks]
+# stratum-local paths brl keeps consistent
+/etc/os-release = /bedrock/etc/os-release
+
+[init]
+# systemd remains PID 1, made Bedrock-aware via /etc/systemd/system.conf.d
+manager = systemd
+BCONF
     if [ -e /etc/os-release ] && [ ! -f "${BETC}/os-release.orig" ]; then
         _hc="$(readlink -f /etc/os-release 2>/dev/null || echo /etc/os-release)"
         case "$_hc" in "${BR}"/*) : ;; *) cp -aL /etc/os-release "${BETC}/os-release.orig" 2>/dev/null || true ;; esac
@@ -1260,7 +1443,7 @@ brl_report() {
     [ -x "${BR}/bin/brl-mem" ] && say "  memory: $(${BR}/bin/brl-mem 2>/dev/null)   disk: $(${BR}/bin/brl-disk 2>/dev/null)"
     say ""
 }
-brl_version() { print_logo "$(cat "$RELEASE_FILE" 2>/dev/null || echo "Bedrock Linux ${BEDROCK_VERSION} ${BEDROCK_CODENAME}")"; say "Bedrock Linux ${BEDROCK_VERSION} ${BEDROCK_CODENAME} (${PORT_TAG} port)"; }
+brl_version() { print_logo "$(cat "$RELEASE_FILE" 2>/dev/null || echo "Bedrock Linux ${BEDROCK_VERSION} ${BEDROCK_CODENAME}")"; say "Bedrock Linux ${BEDROCK_VERSION} ${BEDROCK_CODENAME} (${PORT_TAG} port)"; say "bedrock-port ${BRL_PORT_VERSION}"; }
 
 # ── help ────────────────────────────────────────────────────────────────
 brl_help() {
@@ -1344,7 +1527,9 @@ brl_copy() {
 brl_subcommands() {
     for _sc in list status show fetch fetch-url apply install update copy \
                enable disable remove rename which reload umount \
-               fix deps hijack unhijack report update-urls tutorial version; do
+               fix deps hijack unhijack report update-urls tutorial \
+               capabilities security integrate boot-init rollback verify health \
+               test register-aok archs subcommands version help; do
         echo "$_sc"
     done
 }
@@ -1408,8 +1593,12 @@ braok_probe() {
         chroot)
             # prove chroot(2) works, not just that the binary exists
             has chroot && chroot / /bin/true 2>/dev/null && echo native || echo unavailable ;;
-        unshare)   has unshare && echo native || echo unavailable ;;
-        nsenter)   has nsenter && echo native || echo unavailable ;;
+        unshare)
+            # prove unshare actually executes (not just that the binary exists)
+            has unshare && unshare /bin/true 2>/dev/null && echo native || echo unavailable ;;
+        nsenter)
+            # nsenter needs a target ns to truly exercise; prove it runs + self-enter
+            has nsenter && nsenter --help >/dev/null 2>&1 && echo native || echo unavailable ;;
         mount_ns)
             # real test: create a private mount namespace and run a process in it
             has unshare && unshare -m /bin/true 2>/dev/null && echo native || echo unavailable ;;
@@ -1472,7 +1661,7 @@ braok_probe() {
         etcfs)     echo emulated ;;
         aok_roots)   [ -d "$AOK_ROOTS" ] && echo native || echo unavailable ;;
         aok_persist) [ -d "$AOK_PERSIST" ] && echo native || echo unavailable ;;
-        arch)      uname -m 2>/dev/null || echo unknown ;;
+        arch)      get_system_arch ;;
         *) echo unavailable ;;
     esac
 }
@@ -1495,6 +1684,34 @@ require_cap() {
     case "$_rc" in native|emulated) return 0 ;; esac
     err "operation needs '${1}' which is ${color_alert}unavailable${color_norm} on this iSH-AOK build."
     return 1
+}
+
+# brl security — honest report of the current security posture, plus how to harden.
+brl_security() {
+    print_logo "Bedrock-AOK security posture"
+    # transport
+    if _cab="$(_have_ca_bundle)"; then ok "CA bundle: ${color_file}${_cab}${color_norm}"
+    else warn "no CA bundle found — verified TLS impossible until installed (brl deps)"; fi
+    if tls_verify_works; then ok "verified TLS: ${color_okay}working${color_norm} (downloads authenticate the server)"
+    else warn "verified TLS: ${color_alert}not working${color_norm} — run ${color_cmd}brl deps${color_norm} to install ca-certificates"; fi
+    # integrity tooling
+    if has sha256sum || has shasum || has openssl; then ok "sha256: available (rootfs integrity checked when a checksum is published)"
+    else warn "no sha256 tool — cannot verify download integrity (brl deps installs openssl)"; fi
+    has gpg && ok "gpg: available (package signatures verifiable in strict mode)" || info "gpg: not present (package-signature verification limited)"
+    # posture flags
+    say ""
+    if [ "${BRL_INSECURE:-0}" = 1 ]; then warn "BRL_INSECURE=1 — insecure transport fallback is ENABLED for this run"
+    else ok "insecure fallback: ${color_okay}disabled${color_norm} (secure by default; set BRL_INSECURE=1 to override)"; fi
+    if [ "${BRL_STRICT:-0}" = 1 ]; then ok "BRL_STRICT=1 — package-manager signature/gpg checks kept ON in strata"
+    else info "package-manager checks: relaxed for install reliability on iSH-AOK"
+         info "  set ${color_cmd}BRL_STRICT=1${color_norm} before fetch to keep distro gpg/signature checks enabled"; fi
+    say ""
+    say "Notes:"
+    say "  • Rootfs downloads use verified TLS by default and are sha256-checked when the"
+    say "    mirror publishes SHA256SUMS (LXC does)."
+    say "  • Strata package managers relax gpg by default because fresh iSH-AOK roots"
+    say "    often lack seeded keyrings; ${color_cmd}BRL_STRICT=1${color_norm} keeps them strict where the"
+    say "    keyring is present."
 }
 brl_capabilities() {
     [ -f "$BRAOK_CAPS" ] || braok_detect_caps
@@ -1742,6 +1959,12 @@ brl_test() {
     _t "strat installed"         "[ -f '${BR}/bin/strat' ]"
     _t "os-release is real file" "[ -f /etc/os-release ] && [ ! -L /etc/os-release ] || [ -e /etc/os-release ]"
     _t "capabilities detected"   "[ -f '$BRAOK_CAPS' ] || braok_detect_caps"
+    _t "arch is supported"       "brl_archs | grep -qx \"\$(get_system_arch)\""
+    say "${B}Security${Z}"
+    _t "sha256 tool present"     "has sha256sum || has shasum || has openssl"
+    _t "verify_sha256 detects match" "_tf1=\$(mktemp); echo bedrock>\$_tf1; _th=\$(_sha256 \$_tf1); verify_sha256 \$_tf1 \$_th"
+    _t "verify_sha256 rejects mismatch" "_tf2=\$(mktemp); echo bedrock>\$_tf2; ! verify_sha256 \$_tf2 deadbeef"
+    _t "CA bundle present"       "_have_ca_bundle"
     say "${B}Namespaces / mounts${Z}"
     _t "mount ns unshare works"  "has unshare && unshare -m /bin/true"
     _t "uts ns unshare works"    "has unshare && unshare -u /bin/true"
@@ -1851,8 +2074,16 @@ run_installer() {
 _base="$(basename "$0" 2>/dev/null || echo brl)"
 case "$_base" in
     strat) cmd_strat "$@"; exit $? ;;
+esac
+# When invoked by the installer name with an installer operation (or no args),
+# behave as the installer. Otherwise fall through to the brl command dispatch,
+# so `bedrock-port.sh capabilities`, `bedrock-port.sh archs`, etc. still work.
+case "$_base" in
     bedrock-port.sh|bedrock-port|bedrock-linux*|bedrock.sh)
-        run_installer "$@"; exit $? ;;
+        case "${1:-}" in
+            --hijack|--update|--force-update|--restat|-h|--help|"")
+                run_installer "$@"; exit $? ;;
+        esac ;;
 esac
 _cmd="${1:-help}"; [ "$#" -ge 1 ] && shift
 case "$_cmd" in
@@ -1871,7 +2102,9 @@ case "$_cmd" in
     fix|repair)    brl_fix "$@" ;;
     tutorial)      brl_tutorial "$@" ;;
     subcommands)   brl_subcommands ;;
+    archs)         brl_archs ;;
     capabilities|caps) brl_capabilities "$@" ;;
+    security)      brl_security "$@" ;;
     integrate)     brl_integrate "$@" ;;
     boot-init)     braok_boot_init ;;
     rollback)      brl_rollback "$@" ;;

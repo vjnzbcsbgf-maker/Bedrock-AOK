@@ -1,11 +1,12 @@
 #!/bin/sh
 # ============================================================================
 #  brl-uninstall — total removal of a permanent Bedrock Linux (iSH-AOK) install
-#
-#  The permanent edition blocks `brl unhijack` on purpose. This script is the
-#  deliberate, explicit way to fully undo it: it unmounts every stratum, frees
-#  /etc/os-release, removes all Bedrock files and integration, and restores the
-#  host to a plain Linux system.
+#                                                                    v1.1.0
+#  The permanent editions block `brl unhijack` on purpose. This script is the
+#  deliberate, explicit way to fully undo it: it unmounts every stratum
+#  (namespace-aware), frees /etc/os-release, removes all Bedrock files, the
+#  systemd boot integration + Bedrock-aware drop-in, capability/config state,
+#  and restores the host to a plain Linux system.
 #
 #  Usage:  ./brl-uninstall              (interactive, asks about strata)
 #          ./brl-uninstall --keep-strata   (remove Bedrock, keep /bedrock/strata)
@@ -14,6 +15,7 @@
 # ============================================================================
 set -u
 
+BRL_UNINSTALL_VERSION="1.1.0"
 BR="/bedrock"
 STRATA="${BR}/strata"
 BETC="${BR}/etc"
@@ -141,6 +143,28 @@ for _rc in /etc/bash.bashrc /etc/profile "${HOME}/.bashrc" "${HOME}/.profile" /r
     fi
 done
 
+# ── 4b. systemd boot integration + Bedrock-aware drop-in (v1.1.0) ───────
+say ""
+info "removing systemd boot integration..."
+for _u in bedrock-init.service bedrock.target bedrock-stratum@.service; do
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable "$_u" 2>/dev/null || true
+        systemctl stop "$_u" 2>/dev/null || true
+    fi
+    [ -f "/etc/systemd/system/${_u}" ] && rm -f "/etc/systemd/system/${_u}" 2>/dev/null && ok "removed unit ${_u}" || true
+done
+# Bedrock-aware PID-1 drop-in: remove so systemd stops advertising BEDROCK=1
+if [ -f /etc/systemd/system.conf.d/00-bedrock.conf ]; then
+    rm -f /etc/systemd/system.conf.d/00-bedrock.conf 2>/dev/null && ok "removed systemd Bedrock drop-in"
+    rmdir /etc/systemd/system.conf.d 2>/dev/null || true
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl remove-wants multi-user.target bedrock.target 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+fi
+# External os-release backup marker (used during restore above; clean it up)
+[ -f /etc/os-release.bedrock-orig ] && rm -f /etc/os-release.bedrock-orig 2>/dev/null && ok "cleaned os-release backup" || true
+
 # ── 5. fastfetch config ─────────────────────────────────────────────────
 say ""
 info "restoring fastfetch config..."
@@ -196,7 +220,7 @@ fi
 
 # ── done ────────────────────────────────────────────────────────────────
 say ""
-ok "${B}Bedrock Linux uninstalled.${Z}"
+ok "${B}Bedrock Linux uninstalled.${Z} (brl-uninstall ${BRL_UNINSTALL_VERSION})"
 say "  os-release now reports: $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown}")"
 say "  Open a new shell (or run: exec \$SHELL) for changes to take effect."
 say ""
