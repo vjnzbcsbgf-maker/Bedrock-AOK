@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/bedrock-banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/bedrock-banner-light.svg">
-    <img src="docs/bedrock-banner-dark.svg" alt="Bedrock Linux 0.7.31 Poki (iSH-AOK)" width="700">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/bedrock-banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/bedrock-banner-light.png">
+    <img src="docs/bedrock-banner-dark.png" alt="Bedrock Linux 0.7.31 Poki (iSH-AOK)" width="700">
   </picture>
 </p>
 
