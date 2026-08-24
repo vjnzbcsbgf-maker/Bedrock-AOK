@@ -62,13 +62,13 @@
     <p class="hero-tagline">Run <strong>29 Linux distributions</strong> simultaneously on iOS through iSH-AOK. Mix and match packages across distros with chroot-based strata.</p>
 
     <div class="hero-meta">
-      <span>v<span class="val">1.1.0</span></span>
+      <span>v<span class="val">1.2.0</span></span>
       <span class="dot">&middot;</span>
       <span>GPLv2</span>
       <span class="dot">&middot;</span>
       <span>aarch64</span>
       <span class="dot">&middot;</span>
-      <span><span class="val">5</span> editions</span>
+      <span><span class="val">2</span> editions</span>
       <span class="dot">&middot;</span>
       <span><span class="val">29</span> distros</span>
     </div>
@@ -88,8 +88,8 @@
         <p>Alpine, Debian, Ubuntu, Fedora, Arch, Kali, Gentoo, Void, openSUSE, and 20 more &mdash; all running side by side.</p>
       </div>
       <div class="feat">
-        <h3>Five Editions</h3>
-        <p>Non-permanent, permanent, permanent-integrated, permanent-all, and unified installer. Choose the right level of integration.</p>
+        <h3>Two Editions</h3>
+        <p>Reversible (<code>brl</code>) and permanent (<code>bedrockport.sh</code>) &mdash; both with the full feature set. Clean uninstaller included.</p>
       </div>
       <div class="feat">
         <h3>Capability Detection</h3>
@@ -112,65 +112,33 @@
 
   <section class="sec">
     <h2 class="sec-head">Editions</h2>
-    <p class="sec-sub">Choose the right edition for your setup. All editions now include the integration layer.</p>
+    <p class="sec-sub">Two editions, both with the full feature set. Choose reversible or permanent.</p>
     <div class="ed-grid">
       <div class="ed-card">
-        <div class="ed-name">Non-Permanent</div>
+        <div class="ed-name">Reversible</div>
         <div class="ed-file">brl</div>
         <ul class="ed-feat-list">
           <li>Full stratum management</li>
           <li>Cross-distro commands</li>
           <li>Integration layer</li>
-          <li>Reversible with unhijack</li>
+          <li>Reversible with <code>brl unhijack</code></li>
           <li class="no">Does not persist across reboots</li>
         </ul>
       </div>
-      <div class="ed-card">
+      <div class="ed-card recommended">
         <div class="ed-name">Permanent</div>
-        <div class="ed-file">brl-permanent</div>
+        <div class="ed-file">bedrockport.sh</div>
         <ul class="ed-feat-list">
           <li>Full stratum management</li>
           <li>Cross-distro commands</li>
           <li>Integration layer</li>
           <li>Survives reboots</li>
-          <li>Dedicated uninstaller</li>
-        </ul>
-      </div>
-      <div class="ed-card">
-        <div class="ed-name">Permanent Integrated</div>
-        <div class="ed-file">brl-permanent-integrated</div>
-        <ul class="ed-feat-list">
-          <li>Everything in Permanent</li>
-          <li>systemd boot integration</li>
-          <li>AOK roots registration</li>
-          <li>Health checks &amp; rollback</li>
-          <li>Self-test suite</li>
-        </ul>
-      </div>
-      <div class="ed-card">
-        <div class="ed-name">Permanent All</div>
-        <div class="ed-file">brl-permanent-all</div>
-        <ul class="ed-feat-list">
-          <li>Everything in Integrated</li>
-          <li>All features enabled</li>
-          <li>Maximum integration</li>
-          <li>Full capability suite</li>
-          <li>Structured logging</li>
-        </ul>
-      </div>
-      <div class="ed-card recommended">
-        <div class="ed-name">Unified Installer</div>
-        <div class="ed-file">bedrockport.sh</div>
-        <ul class="ed-feat-list">
-          <li>Combined brl + strat + installer</li>
           <li>--hijack / --update / --restat</li>
-          <li>All integration features</li>
-          <li>Single-file deployment</li>
           <li>Recommended for new installs</li>
         </ul>
       </div>
     </div>
-    <div class="ed-note">All permanent editions use <code>brl-uninstall</code> for removal. The non-permanent edition supports <code>brl unhijack</code>.</div>
+    <div class="ed-note">Use <code>brl-uninstall</code> to remove a permanent install. The reversible edition supports <code>brl unhijack</code>.</div>
   </section>
 
   <section class="sec">
@@ -271,7 +239,7 @@
 
   <section class="sec">
     <h2 class="sec-head">Releases</h2>
-    <p class="sec-sub">Download Bedrock-AOK. Each release includes all five edition scripts.</p>
+    <p class="sec-sub">Download Bedrock-AOK. Each release includes both edition scripts plus the uninstaller.</p>
 
     <div class="rel-note">Releases are published on GitHub by the project maintainers.</div>
 
@@ -353,19 +321,16 @@ function loadReleases() {
       if (!releases || !releases.length || releases.message) {
         container.innerHTML =
           '<div class="rel-card">' +
-          '<div class="rel-head"><div><span class="rel-ver">v1.1.0</span> <span class="rel-latest">Latest</span></div>' +
+          '<div class="rel-head"><div><span class="rel-ver">v1.2.0</span> <span class="rel-latest">Latest</span></div>' +
           '<span class="rel-date">August 2026</span></div>' +
-          '<div class="rel-name">v1.1.0 &mdash; Five Editions Release</div>' +
+          '<div class="rel-name">v1.2.0 &mdash; Streamlined Release</div>' +
           '<div class="rel-body"><p>Major release of Bedrock-AOK for iSH-AOK (aarch64/iOS).</p>' +
-          '<ul><li>Five editions with full integration layer</li><li>29 Linux distributions</li>' +
-          '<li>Capability detection &amp; health checks</li><li>systemd boot integration</li>' +
+          '<ul><li>Two editions: reversible &amp; permanent, both with full features</li><li>29 Linux distributions</li>' +
+          '<li>Parallel apply, stratum pin/export/import, config get/set</li><li>GPG rootfs verification, JSON output, self-update</li>' +
           '<li>Dedicated uninstaller</li></ul></div>' +
           '<div class="rel-assets"><div class="rel-assets-head">Assets</div>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/bedrockport.sh" class="rel-dl" target="_blank">bedrockport.sh</a>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl" class="rel-dl" target="_blank">brl</a>' +
-          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent" class="rel-dl" target="_blank">brl-permanent</a>' +
-          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent-integrated" class="rel-dl" target="_blank">brl-permanent-integrated</a>' +
-          '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-permanent-all" class="rel-dl" target="_blank">brl-permanent-all</a>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl-uninstall" class="rel-dl" target="_blank">brl-uninstall</a>' +
           '</div></div>';
         return;

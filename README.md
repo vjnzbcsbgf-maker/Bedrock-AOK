@@ -11,7 +11,7 @@
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![POSIX Shell](https://img.shields.io/badge/Language-POSIX_Shell-4EAA25.svg)](#)
 [![Platform: iOS | iPadOS](https://img.shields.io/badge/Platform-iOS_|_iPadOS-000000.svg?logo=apple&logoColor=white)](https://github.com/emkey1/AOK-Filesystem-Tools)
-[![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-E95420.svg)](#)
+[![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-E95420.svg)](#)
 [![Strata: 29 distros](https://img.shields.io/badge/Strata-29_Distributions-2ea44f.svg)](#supported-distributions)
 [![Status: In Development](https://img.shields.io/badge/Status-In_Development-FFDD57.svg?labelColor=555)](#development-status)
 [![Arch: aarch64](https://img.shields.io/badge/Arch-aarch64-lightgrey.svg)](#)
@@ -72,9 +72,9 @@ Each distribution lives in its own **stratum**: an isolated root filesystem that
 
 ### Editions & Lifecycle
 
-- **Five editions** — non-permanent (`brl`), permanent (`brl-permanent`), permanent-integrated (`brl-permanent-integrated`), permanent-all (`brl-permanent-all`), and unified installer (`bedrockport.sh`)
-- **Full integration layer** — all editions now include capability detection, structured logging, and the integration functions
-- **Clean uninstaller** — all permanent editions ship a dedicated `brl-uninstall` script that fully restores the host
+- **Two editions** — reversible (`brl`) and permanent (`bedrockport.sh`) — both with the full feature set
+- **v1.2.0 features** — parallel apply, stratum pin/export/import, config get/set, GPG rootfs verification, JSON output, self-update, per-command help
+- **Clean uninstaller** — `brl-uninstall` fully restores the host when removing a permanent install
 
 ### Integration Layer (all editions)
 
@@ -119,8 +119,8 @@ Each distribution lives in its own **stratum**: an isolated root filesystem that
 ### Quick Start
 
 ```sh
-chmod +x brl-permanent
-./brl-permanent hijack
+chmod +x bedrockport.sh
+./bedrockport.sh --hijack
 
 brl fetch alpine
 brl shell alpine
@@ -130,17 +130,15 @@ Three lines. You now have Alpine Linux running as a stratum inside iSH-AOK.
 
 ### Choosing an Edition
 
-| Edition | Script | Persists | Integration | Boot Integration | Uninstall |
-|:---|:---|:---:|:---:|:---:|:---|
-| **Non-Permanent** | `brl` | No | Yes | — | `brl unhijack` |
-| **Permanent** | `brl-permanent` | Yes | Yes | — | `brl-uninstall` |
-| **Permanent Integrated** | `brl-permanent-integrated` | Yes | Yes | systemd | `brl-uninstall` |
-| **Permanent All** | `brl-permanent-all` | Yes | Yes | Full | `brl-uninstall` |
-| **Unified Installer** | `bedrockport.sh` | Yes | Yes | Full | `brl-uninstall` |
+| Edition | Script | Persists | Integration | Uninstall |
+|:---|:---|:---:|:---:|:---|
+| **Reversible** | `brl` | No | Yes | `brl unhijack` |
+| **Permanent** (Recommended) | `bedrockport.sh` | Yes | Yes | `brl-uninstall` |
+| **Uninstaller** | `brl-uninstall` | — | — | — |
 
-All editions now include the integration layer (capability detection, AOK roots registration, structured logging).
+All editions include the full integration layer: parallel apply, stratum pin/export/import, config get/set, GPG rootfs verification, JSON output, self-update, capability detection, AOK roots registration, and structured logging.
 
-#### Non-Permanent Edition
+#### Reversible Edition
 
 ```sh
 chmod +x brl
@@ -149,41 +147,14 @@ chmod +x brl
 
 Does not persist across reboots. Fully reversible with `brl unhijack`.
 
-#### Permanent Edition
-
-```sh
-chmod +x brl-permanent
-./brl-permanent hijack
-```
-
-Survives reboots. Use the dedicated `brl-uninstall` script to remove.
-
-#### Permanent Integrated Edition
-
-```sh
-chmod +x brl-permanent-integrated
-./brl-permanent-integrated hijack
-```
-
-Everything in the permanent edition plus systemd boot integration, AOK roots registration, health checks, and rollback.
-
-#### Permanent All Edition
-
-```sh
-chmod +x brl-permanent-all
-./brl-permanent-all hijack
-```
-
-Maximum integration. All features enabled including full capability suite and structured logging.
-
-#### Unified Installer (Recommended)
+#### Permanent Edition (Recommended)
 
 ```sh
 chmod +x bedrockport.sh
 ./bedrockport.sh --hijack
 ```
 
-Single-file deployment combining `brl` + `strat` + installer. All integration features. Supports `--hijack`, `--update`, `--force-update`, and `--restat`.
+Survives reboots. All integration features. Supports `--hijack`, `--update`, `--force-update`, and `--restat`. Use the dedicated `brl-uninstall` script to remove.
 
 ---
 

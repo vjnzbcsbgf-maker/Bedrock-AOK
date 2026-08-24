@@ -15,7 +15,7 @@
 # ============================================================================
 set -u
 
-BRL_UNINSTALL_VERSION="1.1.0"
+BRL_UNINSTALL_VERSION="1.2.0"
 BR="/bedrock"
 STRATA="${BR}/strata"
 BETC="${BR}/etc"
@@ -157,6 +157,24 @@ done
 if [ -f /etc/systemd/system.conf.d/00-bedrock.conf ]; then
     rm -f /etc/systemd/system.conf.d/00-bedrock.conf 2>/dev/null && ok "removed systemd Bedrock drop-in"
     rmdir /etc/systemd/system.conf.d 2>/dev/null || true
+fi
+# Bedrock PID 1 init shim: restore the original /sbin/init if we replaced it.
+if grep -q 'Bedrock-AOK PID 1 supervisor' /sbin/init 2>/dev/null || [ -e /sbin/init.bedrock-orig ]; then
+    info "restoring original /sbin/init (removing Bedrock PID 1 shim)..."
+    if [ -e /sbin/init.bedrock-orig ]; then
+        if [ -L /sbin/init.bedrock-orig ]; then
+            _origtgt="$(readlink -f /sbin/init.bedrock-orig 2>/dev/null)"
+            [ -n "$_origtgt" ] && ln -sf "$_origtgt" /sbin/init 2>/dev/null || true
+        else
+            cp -a /sbin/init.bedrock-orig /sbin/init 2>/dev/null || true
+        fi
+        rm -f /sbin/init.bedrock-orig 2>/dev/null || true
+        ok "restored original init (systemd is PID 1 again on next boot)"
+    else
+        for _sdi in /lib/systemd/systemd /usr/lib/systemd/systemd /usr/sbin/init; do
+            [ -x "$_sdi" ] && { ln -sf "$_sdi" /sbin/init 2>/dev/null && ok "pointed /sbin/init at ${_sdi}"; break; }
+        done
+    fi
 fi
 if command -v systemctl >/dev/null 2>&1; then
     systemctl remove-wants multi-user.target bedrock.target 2>/dev/null || true

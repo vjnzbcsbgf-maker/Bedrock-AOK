@@ -1,6 +1,6 @@
 #!/bin/sh
 # ============================================================================
-#  Bedrock Linux — iSH-AOK port  (brl / strat)          bedrock-port  v1.1.0
+#  Bedrock Linux — iSH-AOK port  (brl / strat)   bedrock-port  v1.2.0 [PERMANENT]
 #  Faithful reimplementation of Bedrock Linux for iSH-AOK (iOS ARM64/aarch64).
 #
 #  Mixes packages from many distributions as "strata". Uses chroot + bind
@@ -9,14 +9,20 @@
 #
 #  Runtime-proven capability detection (0 fakes): a feature is "native" only
 #  if the actual syscall succeeds. Secure by default: verified TLS + sha256
-#  integrity on downloads. crossfs/etcfs are emulated (no FUSE requirement).
+#  (+ GPG when available) integrity on downloads. crossfs/etcfs emulated.
 #
+#  v1.2.0 adds: parallel apply, stratum pin/export/import, config get/set,
+#  gpg rootfs verification, JSON output, self-update, per-command help.
+#
+#  PERMANENT edition: unhijack is blocked (use brl-uninstall to fully remove).
+#  Reversible twin is 'brl' (identical features, working unhijack).
 #  Invoke:  brl <command> [args]   |   strat [-r] <stratum> <cmd>
 #  Install: ./bedrock-port.sh --hijack   (see --help)
 # ============================================================================
 set -u
+umask 022                       # safe default perms for anything we create
 
-BRL_PORT_VERSION="1.1.0"
+BRL_PORT_VERSION="1.2.0"
 BR="/bedrock"
 STRATA="${BR}/strata"
 CROSSBIN="${BR}/cross/bin"
@@ -27,8 +33,21 @@ RELEASE_FILE="${BETC}/bedrock-release"
 URLCACHE="${BETC}/urls.cache"
 BEDROCK_VERSION="0.7.31"
 BEDROCK_CODENAME="Poki"
-PORT_TAG="iSH-AOK"
+PORT_TAG="iSH-AOK-permanent"
 LXC="https://images.linuxcontainers.org/images"
+BRL_SELF_URL="${BRL_SELF_URL:-}"   # set to enable self-update from a trusted URL
+
+# Safe temp workspace with guaranteed cleanup on exit/interrupt.
+BRL_TMPDIR=""
+_mktemp_dir() {
+    if [ -z "$BRL_TMPDIR" ]; then
+        BRL_TMPDIR="$(mktemp -d 2>/dev/null || mktemp -d -t brl 2>/dev/null || echo "/tmp/brl-$$")"
+        mkdir -p "$BRL_TMPDIR" 2>/dev/null || true
+    fi
+    echo "$BRL_TMPDIR"
+}
+_cleanup() { [ -n "$BRL_TMPDIR" ] && rm -rf "$BRL_TMPDIR" 2>/dev/null || true; }
+trap _cleanup EXIT INT TERM HUP
 
 ESC=$(printf '\033')
 # Official Bedrock Linux color palette
@@ -214,6 +233,31 @@ fetch_expected_sha256() {
         [ -n "$_sh" ] && { echo "$_sh"; return 0; }
     done
     return 1
+}
+# Verify a detached GPG signature for a file, if a .asc/.sig is published AND
+# gpg is available AND we have (or can import) the signer key. Returns:
+#   0 = signature verified, OR no signature/gpg available (advisory)
+#   1 = signature present but verification FAILED (hard fail)
+verify_gpg() {
+    _vgf="$1"; _vgurl="$2"
+    has gpg || return 0
+    _vgdir="$(_mktemp_dir)"; _vgsig="${_vgdir}/$(basename "$_vgf").asc"
+    _vgot=1
+    for _ext in .asc .sig SHA256SUMS.asc; do
+        case "$_ext" in
+            SHA256SUMS.asc) _vgu="${_vgurl%/*}/SHA256SUMS.asc" ;;
+            *)              _vgu="${_vgurl}${_ext}" ;;
+        esac
+        if dl "$_vgu" "$_vgsig" 2>/dev/null && [ -s "$_vgsig" ]; then _vgot=0; break; fi
+    done
+    [ "$_vgot" = 0 ] || return 0   # no signature published — advisory pass
+    # Try verification against the current keyring.
+    if gpg --verify "$_vgsig" "$_vgf" 2>/dev/null; then ok "gpg signature verified"; return 0; fi
+    warn "gpg signature present but could not be verified (missing signer key)"
+    warn "  install the distro's release key to enable signature checking"
+    # Not a hard fail unless strict: a missing key is not a bad signature.
+    if [ "${BRL_STRICT:-0}" = 1 ]; then err "BRL_STRICT: refusing unverified signature"; return 1; fi
+    return 0
 }
 
 dl() {
@@ -521,14 +565,41 @@ brl_fetch_list() {
 }
 brl_apply() {
     need_root; _afail=""
-    for _an in $(catalog_names); do
-        _ar="${STRATA}/${_an}"
-        { [ -d "$_ar" ] && [ -n "$(ls -A "$_ar" 2>/dev/null)" ]; } && { info "$_an present"; continue; }
-        say ""; say "${B}=== ${_an} ===${Z}"
-        _au="$(lookup_url "$_an" || true)"
-        [ -n "$_au" ] || { warn "$_an unresolved"; _afail="${_afail} ${_an}"; continue; }
-        _do_fetch "$_an" "$_au" 0 || { warn "$_an failed"; _afail="${_afail} ${_an}"; }
-    done
+    # Parallelism: default 3 concurrent fetches, override with BRL_JOBS.
+    _ajobs="${BRL_JOBS:-3}"; case "$_ajobs" in ''|*[!0-9]*) _ajobs=3 ;; esac
+    [ "$_ajobs" -lt 1 ] && _ajobs=1
+    if [ "$_ajobs" = 1 ]; then
+        # Sequential path (also used when job control is unavailable).
+        for _an in $(catalog_names); do
+            _ar="${STRATA}/${_an}"
+            { [ -d "$_ar" ] && [ -n "$(ls -A "$_ar" 2>/dev/null)" ]; } && { info "$_an present"; continue; }
+            say ""; say "${B}=== ${_an} ===${Z}"
+            _au="$(lookup_url "$_an" || true)"
+            [ -n "$_au" ] || { warn "$_an unresolved"; _afail="${_afail} ${_an}"; continue; }
+            _do_fetch "$_an" "$_au" 0 || { warn "$_an failed"; _afail="${_afail} ${_an}"; }
+        done
+    else
+        say "${B}Fetching in parallel (${_ajobs} jobs)...${Z}"
+        _atmp="$(_mktemp_dir)"; _arun=0
+        for _an in $(catalog_names); do
+            _ar="${STRATA}/${_an}"
+            { [ -d "$_ar" ] && [ -n "$(ls -A "$_ar" 2>/dev/null)" ]; } && { info "$_an present"; continue; }
+            # throttle
+            while [ "$(jobs -p 2>/dev/null | wc -l)" -ge "$_ajobs" ]; do wait 2>/dev/null || break; done
+            (
+                _au="$(lookup_url "$_an" || true)"
+                if [ -z "$_au" ]; then echo "unresolved $_an" > "${_atmp}/${_an}.res"
+                elif _do_fetch "$_an" "$_au" 0 >/dev/null 2>&1; then echo "ok $_an" > "${_atmp}/${_an}.res"
+                else echo "failed $_an" > "${_atmp}/${_an}.res"; fi
+            ) &
+            _arun=$((_arun+1))
+        done
+        wait 2>/dev/null || true
+        for _rf in "${_atmp}"/*.res; do
+            [ -f "$_rf" ] || continue; read -r _st _sn < "$_rf"
+            case "$_st" in ok) ok "$_sn";; *) warn "$_sn: $_st"; _afail="${_afail} ${_sn}";; esac
+        done
+    fi
     say ""; [ -n "$_afail" ] && warn "failed:${_afail}" || ok "all strata fetched"
     brl_reload
 }
@@ -544,6 +615,7 @@ _do_fetch() {
         info "Downloading (will verify sha256)..."
         dl "$_dfu" "$_dftmp" || { rm -rf "$_dfroot" "$_dftmp"; err "download failed for $_dfn"; return 1; }
         verify_sha256 "$_dftmp" "$_dfsha" || { rm -rf "$_dfroot" "$_dftmp"; err "integrity check failed — refusing to install $_dfn"; return 1; }
+        verify_gpg "$_dftmp" "$_dfu" || { rm -rf "$_dfroot" "$_dftmp"; err "signature check failed — refusing to install $_dfn"; return 1; }
         info "Extracting..."
         if   tar -xf "$_dftmp" -C "$_dfroot" 2>/dev/null; then :
         elif has xz && xz -dc "$_dftmp" 2>/dev/null | tar -xf - -C "$_dfroot" 2>/dev/null; then :
@@ -1051,8 +1123,46 @@ _stratum_shell() {
     for _ss in /bin/bash /usr/bin/bash /bin/ash /bin/sh /usr/bin/sh; do [ -x "${1}${_ss}" ] && { echo "$_ss"; return 0; }; done
     echo "/bin/sh"
 }
-stratum_exists() { _sx="$1"; [ "$_sx" = "$(init_stratum)" ] && return 0; [ -d "${STRATA}/${_sx}" ] && [ -n "$(ls -A "${STRATA}/${_sx}" 2>/dev/null)" ]; }
-is_enabled() { _ie="$1"; [ "$_ie" = "$(init_stratum)" ] && return 0; [ -e "${ENABLED}/${_ie}" ]; }
+# ── stratum aliases (faithful to real Bedrock) ─────────────────────────
+# An alias is a symlink in /bedrock/strata/ pointing at another stratum dir.
+# deref() resolves an alias to its real stratum name (or echoes the name as-is).
+deref() {
+    _dref="${1:-}"; [ -n "$_dref" ] || return 1
+    _dpath="${STRATA}/${_dref}"
+    if [ -L "$_dpath" ]; then
+        _dr="$(readlink -f "$_dpath" 2>/dev/null)" || return 1
+        basename "$_dr" 2>/dev/null || return 1
+    else
+        echo "$_dref"
+    fi
+}
+is_alias() { [ -L "${STRATA}/${1}" ]; }
+stratum_exists() { _sx="$(deref "$1" 2>/dev/null || echo "$1")"; [ "$_sx" = "$(init_stratum)" ] && return 0; [ -d "${STRATA}/${_sx}" ] && [ -n "$(ls -A "${STRATA}/${_sx}" 2>/dev/null)" ]; }
+is_enabled() { _ie="$(deref "$1" 2>/dev/null || echo "$1")"; [ "$_ie" = "$(init_stratum)" ] && return 0; [ -e "${ENABLED}/${_ie}" ]; }
+brl_alias() {
+    need_root
+    _an="${1:-}"; _at="${2:-}"
+    if [ -z "$_an" ]; then
+        say "${B}Aliases:${Z}"
+        _found=0
+        for _ad in "${STRATA}"/*; do
+            [ -L "$_ad" ] || continue; _found=1
+            printf "  %s -> %s\n" "$(basename "$_ad")" "$(deref "$(basename "$_ad")")"
+        done
+        [ "$_found" = 0 ] && say "  (none)"
+        return 0
+    fi
+    [ -n "$_at" ] || die "usage: brl alias <alias-name> <stratum>"
+    _atr="$(deref "$_at" 2>/dev/null || echo "$_at")"
+    stratum_exists "$_atr" || die "no such stratum: $_at"
+    [ -e "${STRATA}/${_an}" ] && ! is_alias "$_an" && die "'$_an' already exists as a real stratum"
+    ln -sfn "$_atr" "${STRATA}/${_an}" 2>/dev/null && ok "alias ${_an} -> ${_atr}" || die "could not create alias"
+}
+brl_unalias() {
+    need_root; _un="${1:-}"; [ -n "$_un" ] || die "usage: brl unalias <alias>"
+    is_alias "$_un" || die "'$_un' is not an alias"
+    rm -f "${STRATA}/${_un}" 2>/dev/null && ok "removed alias ${_un}" || die "could not remove alias"
+}
 
 # ============================================================================
 #  STRAT
@@ -1065,6 +1175,7 @@ cmd_strat() {
     _sn="${1:-}"; [ "$#" -ge 1 ] && shift
     [ -n "$_sn" ] || die "usage: strat [-r] <stratum> <command> [args...]"
     stratum_exists "$_sn" || die "no such stratum: '$_sn' (see: brl list)"
+    _sn="$(deref "$_sn" 2>/dev/null || echo "$_sn")"
     if [ "$_sn" = "$(init_stratum)" ]; then [ "$#" -ge 1 ] || set -- "${SHELL:-/bin/sh}"; exec "$@"; fi
     _sroot="${STRATA}/${_sn}"
     has chroot || die "chroot unavailable."
@@ -1214,24 +1325,29 @@ brl_install() {
 brl_update() {
     need_root; _upn="${1:-}"
     if [ -n "$_upn" ]; then
+        is_pinned "$_upn" && die "'$_upn' is pinned. Unpin to update: brl pin $_upn"
         [ -d "${STRATA}/${_upn}" ] || die "no such stratum: $_upn"
         _upc="$(_pkg_cmd "${STRATA}/${_upn}")"; [ -n "$_upc" ] || die "no known pkg mgr in $_upn"
         say "${GR}updating ${_upn}${Z}"; cmd_strat "$_upn" /bin/sh -c "$_upc"; return $?
     fi
     for _upd in "${STRATA}"/*; do [ -d "$_upd" ] || continue; _ups="$(basename "$_upd")"
+        is_pinned "$_ups" && { info "$_ups: pinned, skipping"; continue; }
         _upc="$(_pkg_cmd "$_upd")"; [ -n "$_upc" ] || { warn "$_ups: no pkg mgr"; continue; }
         say ""; say "${B}=== ${_ups} ===${Z}"; cmd_strat "$_ups" /bin/sh -c "$_upc" || warn "$_ups: nonzero"
     done
 }
 
 brl_list() {
+    case "${1:-}" in --json) brl_list_json; return 0 ;; esac
     _lm="all"; case "${1:-}" in -e|--enabled) _lm="enabled" ;; -d|--disabled) _lm="disabled" ;; esac
     _li="$(init_stratum)"
     for _ld in "$_li" $(ls "${STRATA}" 2>/dev/null); do
         [ "$_ld" = "$_li" ] || [ -d "${STRATA}/${_ld}" ] || continue
+        [ -L "${STRATA}/${_ld}" ] && continue
         if is_enabled "$_ld"; then _ls="enabled"; else _ls="disabled"; fi
         case "$_lm" in enabled) [ "$_ls" = "enabled" ] || continue ;; disabled) [ "$_ls" = "disabled" ] || continue ;; esac
-        say "$_ld"
+        _lpm=""; is_pinned "$_ld" && _lpm=" ${color_warn}(pinned)${color_norm}"
+        printf "%s%s\n" "$_ld" "$_lpm"
     done
 }
 brl_status() {
@@ -1246,27 +1362,58 @@ brl_status() {
     [ "$_stn" = "$(init_stratum)" ] && say "${_stn}: enabled (init)" || { is_enabled "$_stn" && say "${_stn}: enabled" || say "${_stn}: disabled"; }
 }
 brl_which() {
+    _wmode="cmd"
+    case "${1:-}" in
+        --bin)  _wmode="bin";  shift ;;
+        --file) _wmode="file"; shift ;;
+        --pid)  _wmode="pid";  shift ;;
+        --xww|--current) _wmode="current"; shift ;;
+    esac
     _wq="${1:-}"
-    if [ -z "$_wq" ]; then
+    # No argument, or --current: report the current stratum.
+    if [ -z "$_wq" ] || [ "$_wmode" = "current" ]; then
         [ -n "${BEDROCK_STRATUM:-}" ] && { say "$BEDROCK_STRATUM"; return 0; }
         [ -f "${BRUN}/current_stratum" ] && { cat "${BRUN}/current_stratum"; return 0; }
         init_stratum; return 0
     fi
-    command -v "$_wq" >/dev/null 2>&1 && { say "$(init_stratum)"; return 0; }
-    if [ -e "${CROSSBIN}/${_wq}" ]; then
-        _wo="$(sed -n 's/^# crossfs: .* from //p' "${CROSSBIN}/${_wq}" 2>/dev/null | head -1)"
-        [ -n "$_wo" ] && { say "$_wo"; return 0; }
-    fi
-    for _wd in "${STRATA}"/*; do [ -d "$_wd" ] || continue
-        for _wb in usr/bin bin usr/sbin sbin; do [ -x "${_wd}/${_wb}/${_wq}" ] && { basename "$_wd"; return 0; }; done
-    done
-    die "not found in any stratum: $_wq"
+    case "$_wmode" in
+        pid)
+            # which stratum owns the process with this PID (via its root)
+            [ -d "/proc/${_wq}" ] || die "no such pid: $_wq"
+            _wroot="$(readlink -f "/proc/${_wq}/root" 2>/dev/null || true)"
+            if [ -n "$_wroot" ]; then
+                case "$_wroot" in
+                    "${STRATA}"/*) say "$(printf '%s' "${_wroot#"${STRATA}/"}" | cut -d/ -f1)"; return 0 ;;
+                    *) say "$(init_stratum)"; return 0 ;;
+                esac
+            fi
+            # proc root not readable (common for PID 1 / other users): assume init
+            say "$(init_stratum)"; return 0 ;;
+        file)
+            # which stratum a path belongs to (if under /bedrock/strata/<s>)
+            _wrp="$(readlink -f "$_wq" 2>/dev/null || echo "$_wq")"
+            case "$_wrp" in
+                "${STRATA}"/*) say "$(printf '%s' "${_wrp#"${STRATA}/"}" | cut -d/ -f1)"; return 0 ;;
+                *) say "$(init_stratum)"; return 0 ;;
+            esac ;;
+        bin|cmd)
+            if [ "$_wmode" = "cmd" ] && command -v "$_wq" >/dev/null 2>&1; then say "$(init_stratum)"; return 0; fi
+            if [ -e "${CROSSBIN}/${_wq}" ]; then
+                _wo="$(sed -n 's/^# crossfs: .* from //p' "${CROSSBIN}/${_wq}" 2>/dev/null | head -1)"
+                [ -n "$_wo" ] && { say "$_wo"; return 0; }
+            fi
+            for _wd in "${STRATA}"/*; do [ -d "$_wd" ] || continue; [ -L "$_wd" ] && continue
+                for _wb in usr/bin bin usr/sbin sbin usr/local/bin; do [ -x "${_wd}/${_wb}/${_wq}" ] && { basename "$_wd"; return 0; }; done
+            done
+            die "not found in any stratum: $_wq" ;;
+    esac
 }
 brl_enable()  { need_root; _en="${1:-}"; [ -n "$_en" ] || die "usage: brl enable <stratum>"; [ -d "${STRATA}/${_en}" ] || die "no such stratum: $_en"; mkdir -p "$ENABLED"; : > "${ENABLED}/${_en}"; brl_reload; ok "enabled $_en"; }
 brl_disable() { need_root; _dn="${1:-}"; [ -n "$_dn" ] || die "usage: brl disable <stratum>"; [ "$_dn" = "$(init_stratum)" ] && die "cannot disable init stratum"; rm -f "${ENABLED}/${_dn}"; _unmount_pseudo "${STRATA}/${_dn}"; brl_reload; ok "disabled $_dn"; }
 brl_remove() {
     need_root; _rmn="${1:-}"; [ -n "$_rmn" ] || die "usage: brl remove <stratum>"
     [ "$_rmn" = "$(init_stratum)" ] && die "cannot remove init stratum"
+    is_pinned "$_rmn" && die "'$_rmn' is pinned. Unpin first: brl pin $_rmn"
     _rmr="${STRATA}/${_rmn}"; [ -d "$_rmr" ] || die "no such stratum: $_rmn"
     _unmount_pseudo "$_rmr"
     [ -r /proc/mounts ] && awk -v p="$_rmr" '$2~("^"p){f=1} END{exit !f}' /proc/mounts 2>/dev/null && \
@@ -1462,8 +1609,12 @@ brl_help() {
     printf "  ${color_cmd}enable${color_norm} / ${color_cmd}disable ${color_sub}<s>${color_norm}   add/remove a stratum from cross-command access\n"
     printf "  ${color_cmd}remove${color_norm} / ${color_cmd}rename ${color_sub}<s>${color_norm}    delete / rename a stratum\n"
     printf "  ${color_cmd}copy ${color_sub}<s> <file> <d>${color_norm}    copy a file between strata\n"
+    printf "  ${color_cmd}pin ${color_sub}[stratum]${color_norm}          protect a stratum from remove/update (toggle)\n"
+    printf "  ${color_cmd}alias ${color_sub}<name> <stratum>${color_norm} create an alternate name for a stratum\n"
+    printf "  ${color_cmd}which ${color_sub}[--bin|--file|--pid]${color_norm} identify which stratum owns a cmd/path/pid\n"
+    printf "  ${color_cmd}export${color_norm} / ${color_cmd}import-tar${color_norm}     save / restore a stratum as a portable tarball\n"
     printf "\n${B}Packages${Z}\n"
-    printf "  ${color_cmd}update ${color_sub}[stratum]${color_norm}       update packages (one stratum or all)\n"
+    printf "  ${color_cmd}update ${color_sub}[stratum]${color_norm}       update packages (one stratum or all; skips pinned)\n"
     printf "  ${color_cmd}install ${color_sub}<s> <pkg>...${color_norm}   install package(s) into a stratum\n"
     printf "\n${B}Running commands${Z}\n"
     printf "  ${color_cmd}shell${color_norm} / ${color_cmd}enter ${color_sub}<stratum>${color_norm} open an interactive shell in a stratum\n"
@@ -1471,15 +1622,20 @@ brl_help() {
     printf "\n${B}System${Z}\n"
     printf "  ${color_cmd}hijack ${color_sub}[name]${color_norm}          convert this system into Bedrock Linux\n"
     printf "  ${color_cmd}unhijack${color_norm}               revert the hijack\n"
+    printf "  ${color_cmd}apply ${color_sub}[BRL_JOBS=n]${color_norm}      fetch the whole catalog (parallel)\n"
     printf "  ${color_cmd}update-urls${color_norm}            re-resolve stratum sources from live mirrors\n"
+    printf "  ${color_cmd}config ${color_sub}get|set${color_norm}         read/write bedrock.conf\n"
+    printf "  ${color_cmd}capabilities${color_norm} / ${color_cmd}security${color_norm} runtime capability + security posture\n"
     printf "  ${color_cmd}reload${color_norm}                 rebuild cross-command wrappers\n"
     printf "  ${color_cmd}umount ${color_sub}[stratum]${color_norm}       release stratum mounts\n"
     printf "  ${color_cmd}fix${color_norm} / ${color_cmd}repair ${color_sub}[stratum]${color_norm} re-apply environment fixes to a stratum\n"
+    printf "  ${color_cmd}verify${color_norm} / ${color_cmd}health${color_norm} / ${color_cmd}test${color_norm}  integrity / health / regression suite\n"
     printf "  ${color_cmd}deps${color_norm}                   check/install host dependencies\n"
     printf "  ${color_cmd}report${color_norm}                 system health check\n"
+    printf "  ${color_cmd}self-update${color_norm}            re-fetch the script (verified)\n"
     printf "  ${color_cmd}tutorial${color_norm}               show a quick tutorial\n"
     printf "  ${color_cmd}subcommands${color_norm}            list all subcommands\n"
-    printf "  ${color_cmd}version${color_norm}, ${color_cmd}-h${color_norm}/${color_cmd}--help${color_norm}     version / this message\n"
+    printf "  ${color_cmd}version${color_norm}, ${color_cmd}help ${color_sub}[cmd]${color_norm}      version / help (per-command help available)\n"
     printf "\n${B}Quickstart${Z}\n"
     printf "  ${color_cmd}brl hijack${color_norm} && ${color_cmd}brl fetch alpine${color_norm} && ${color_cmd}brl shell alpine${color_norm}\n"
 }
@@ -1488,22 +1644,30 @@ brl_help() {
 
 # brl show <stratum> — show details about a stratum (official parity)
 brl_show() {
-    _shw="${1:-}"; [ -n "$_shw" ] || die "usage: brl show <stratum>"
+    _shpmm=0; case "${1:-}" in --pmm) _shpmm=1; shift ;; esac
+    _shw="${1:-}"; [ -n "$_shw" ] || die "usage: brl show [--pmm] <stratum>"
     stratum_exists "$_shw" || die "no such stratum: $_shw"
-    _shr="${STRATA}/${_shw}"
-    printf "${color_strat}%s${color_norm}\n" "$_shw"
-    if [ "$_shw" = "$(init_stratum)" ]; then
-        printf "  ${color_misc}type:${color_norm}    init stratum\n"
-        _shr="/"
+    _shreal="$(deref "$_shw" 2>/dev/null || echo "$_shw")"
+    _shr="${STRATA}/${_shreal}"
+    [ "$_shreal" = "$(init_stratum)" ] && _shr="/"
+    # --pmm: just print the package manager name (official parity).
+    if [ "$_shpmm" = 1 ]; then
+        _pmm="$(_pkg_install_cmd "$_shr" 2>/dev/null | awk '{print $1}')"
+        [ -n "$_pmm" ] && echo "$_pmm" || echo "none"
+        return 0
     fi
+    printf "${color_strat}%s${color_norm}\n" "$_shw"
+    is_alias "$_shw" && printf "  ${color_misc}alias of:${color_norm} %s\n" "$_shreal"
+    [ "$_shreal" = "$(init_stratum)" ] && printf "  ${color_misc}type:${color_norm}    init stratum\n"
     is_enabled "$_shw" && printf "  ${color_misc}status:${color_norm}  ${color_okay}enabled${color_norm}\n" || printf "  ${color_misc}status:${color_norm}  ${color_warn}disabled${color_norm}\n"
+    is_pinned "$_shreal" && printf "  ${color_misc}pinned:${color_norm}  yes\n"
     if [ -f "${_shr}/etc/os-release" ]; then
         _shp="$(. "${_shr}/etc/os-release" 2>/dev/null; echo "${PRETTY_NAME:-${NAME:-unknown}}")"
         printf "  ${color_misc}distro:${color_norm}  %s\n" "$_shp"
     fi
     _shpm="$(_pkg_install_cmd "$_shr" 2>/dev/null | awk '{print $1}')"
     [ -n "$_shpm" ] && printf "  ${color_misc}pkgmgr:${color_norm}  %s\n" "$_shpm"
-    printf "  ${color_misc}path:${color_norm}    %s\n" "${STRATA}/${_shw}"
+    printf "  ${color_misc}path:${color_norm}    %s\n" "${STRATA}/${_shreal}"
 }
 
 # brl copy <src-stratum> <file> <dst-stratum> [dstpath] — copy a file between strata
@@ -1523,12 +1687,141 @@ brl_copy() {
     cp -a "$_srcpath" "$_dstpath" 2>/dev/null && ok "copied ${_cs}:${_cf} -> ${_cd}:${_cdp}" || die "copy failed"
 }
 
+# ── v1.2.0: pinning (protect a stratum from remove/update) ──────────────
+_pin_file() { echo "${BETC}/pinned"; }
+is_pinned() { _pf="$(_pin_file)"; [ -f "$_pf" ] && grep -qx "$1" "$_pf" 2>/dev/null; }
+brl_pin() {
+    need_root; _pn="${1:-}"
+    _pf="$(_pin_file)"; touch "$_pf" 2>/dev/null || true
+    case "$_pn" in
+        ""|--list) say "${B}Pinned strata:${Z}"; [ -s "$_pf" ] && sed 's/^/  /' "$_pf" || say "  (none)" ;;
+        *)
+            stratum_exists "$_pn" || die "no such stratum: $_pn"
+            if is_pinned "$_pn"; then
+                sed -i "/^${_pn}\$/d" "$_pf" 2>/dev/null; ok "unpinned ${_pn}"
+            else
+                echo "$_pn" >> "$_pf"; ok "pinned ${_pn} (protected from remove/update)"
+            fi ;;
+    esac
+}
+
+# ── v1.2.0: export / import a stratum as a portable tarball ──────────────
+brl_export() {
+    need_root; _en="${1:-}"; _ef="${2:-}"
+    [ -n "$_en" ] && [ -n "$_ef" ] || die "usage: brl export <stratum> <file.tar.gz>"
+    stratum_exists "$_en" || die "no such stratum: $_en"
+    _er="${STRATA}/${_en}"
+    say "${GR}exporting ${_en} -> ${_ef}${Z}"
+    if has gzip; then (cd "$_er" && tar cf - . 2>/dev/null) | gzip > "$_ef" 2>/dev/null
+    else (cd "$_er" && tar cf - . 2>/dev/null) > "$_ef" 2>/dev/null; fi
+    [ -s "$_ef" ] && { ok "exported ($(( $(wc -c <"$_ef")/1024/1024 )) MB)"; _sh="$(_sha256 "$_ef")"; [ -n "$_sh" ] && say "  sha256: ${_sh}"; } || die "export failed"
+}
+brl_import_tar() {
+    need_root; _in="${1:-}"; _if="${2:-}"
+    [ -n "$_in" ] && [ -n "$_if" ] || die "usage: brl import-tar <name> <file.tar[.gz]>"
+    [ -f "$_if" ] || die "no such file: $_if"
+    ensure_deps || die "deps missing"
+    _ir="${STRATA}/${_in}"
+    { [ -d "$_ir" ] && [ -n "$(ls -A "$_ir" 2>/dev/null)" ]; } && die "'$_in' exists. brl remove $_in first"
+    mkdir -p "$_ir"
+    say "${GR}importing ${_if} -> ${_in}${Z}"
+    if   tar -xzf "$_if" -C "$_ir" 2>/dev/null; then :
+    elif tar -xf "$_if" -C "$_ir" 2>/dev/null; then :
+    elif has gzip && gzip -dc "$_if" 2>/dev/null | tar -xf - -C "$_ir" 2>/dev/null; then :
+    else rm -rf "$_ir"; die "import failed (unrecognized archive)"; fi
+    _prepare_stratum "$_ir" "$_in"; mkdir -p "$ENABLED"; : > "${ENABLED}/${_in}"
+    brl_reload >/dev/null 2>&1 || true
+    ok "imported stratum '${_in}'"
+}
+
+# ── v1.2.0: config get/set (reads/writes /bedrock/etc/bedrock.conf) ─────
+_conf_file() { echo "${BETC}/bedrock.conf"; }
+brl_config() {
+    _cf="$(_conf_file)"
+    case "${1:-get}" in
+        get)
+            _ck="${2:-}"
+            if [ -z "$_ck" ]; then [ -f "$_cf" ] && cat "$_cf" || say "(no config)"; return 0; fi
+            # key may be "section.key" or just "key"
+            grep -vE '^\s*#|^\s*$' "$_cf" 2>/dev/null | sed -n "s/^[[:space:]]*${_ck##*.}[[:space:]]*=[[:space:]]*//p" | head -1
+            ;;
+        set)
+            need_root; _ck="${2:-}"; _cv="${3:-}"
+            [ -n "$_ck" ] || die "usage: brl config set <key> <value>"
+            touch "$_cf" 2>/dev/null || die "cannot write config"
+            _kk="${_ck##*.}"
+            if grep -qE "^[[:space:]]*${_kk}[[:space:]]*=" "$_cf" 2>/dev/null; then
+                sed -i "s|^[[:space:]]*${_kk}[[:space:]]*=.*|${_kk} = ${_cv}|" "$_cf"
+            else
+                printf '%s = %s\n' "$_kk" "$_cv" >> "$_cf"
+            fi
+            ok "set ${_kk} = ${_cv}"
+            ;;
+        *) die "usage: brl config [get [key] | set <key> <value>]" ;;
+    esac
+}
+
+# ── v1.2.0: self-update (verified) ──────────────────────────────────────
+brl_self_update() {
+    need_root
+    [ -n "$BRL_SELF_URL" ] || die "set BRL_SELF_URL to a trusted https URL of the script first"
+    ensure_deps || die "deps missing"
+    _sud="$(_mktemp_dir)"; _sunew="${_sud}/bedrock-port.new"
+    say "${GR}fetching update from ${BRL_SELF_URL}${Z}"
+    dl "$BRL_SELF_URL" "$_sunew" || die "download failed"
+    # sanity: must be a POSIX sh script that parses and declares our version var
+    head -1 "$_sunew" | grep -q '^#!/bin/sh' || die "downloaded file is not a shell script"
+    sh -n "$_sunew" 2>/dev/null || die "downloaded script failed syntax check — refusing"
+    grep -q 'BRL_PORT_VERSION=' "$_sunew" || die "downloaded script is not bedrock-port — refusing"
+    _sunew_ver="$(grep -m1 'BRL_PORT_VERSION=' "$_sunew" | cut -d'"' -f2)"
+    cp -f "${BR}/bin/brl" "${BR}/bin/brl.bak" 2>/dev/null || true
+    cp -f "$_sunew" "${BR}/bin/brl" && chmod +x "${BR}/bin/brl" && ok "updated to ${_sunew_ver} (backup: ${BR}/bin/brl.bak)" || die "install failed"
+}
+
+# ── v1.2.0: per-command help ────────────────────────────────────────────
+brl_help_cmd() {
+    case "${1:-}" in
+        fetch)    say "brl fetch [-r] <stratum>   Acquire a stratum. -r = restricted (no crossfs)."; say "         brl fetch --list          Show the catalog." ;;
+        strat)    say "strat [-r] <stratum> <cmd> Run a command inside a stratum (private mount ns when available)." ;;
+        pin)      say "brl pin [<stratum>]        Toggle protection of a stratum from remove/update. No arg lists pins." ;;
+        export)   say "brl export <stratum> <f>   Save a stratum to a portable tar.gz (prints sha256)." ;;
+        import-tar) say "brl import-tar <name> <f> Create a stratum from a tar[.gz] made by 'brl export'." ;;
+        config)   say "brl config get [key]       Read config. brl config set <key> <val>  Write it." ;;
+        alias)    say "brl alias <name> <stratum>  Create an alternate name for a stratum. No args lists aliases." ;;
+        unalias)  say "brl unalias <name>         Remove a stratum alias." ;;
+        which)    say "brl which [--bin|--file|--pid] <arg>  Which stratum owns a command / path / pid. No arg = current stratum." ;;
+        show)     say "brl show [--pmm] <stratum>  Show stratum details, or just its package manager with --pmm." ;;
+        security) say "brl security               Report TLS/checksum/gpg posture and how to harden." ;;
+        capabilities) say "brl capabilities [--json] Runtime-proven capability report." ;;
+        self-update)  say "brl self-update          Re-fetch the script from BRL_SELF_URL (verified) and replace brl." ;;
+        init-install) say "brl init-install         Make Bedrock PID 1: installs a /sbin/init shim that runs early"; say "                         setup then exec()s the real systemd. Opt-in. Reversible via init-uninstall." ;;
+        init-uninstall) say "brl init-uninstall     Restore the original /sbin/init (systemd back as sole PID 1)." ;;
+        init-status)  say "brl init-status          Show current PID 1, whether the Bedrock init shim is installed, and the real init path." ;;
+        "")       brl_help ;;
+        *)        say "No detailed help for '${1}'. See: brl help"; ;;
+    esac
+}
+
+# ── v1.2.0: JSON output helpers ─────────────────────────────────────────
+brl_list_json() {
+    printf '['; _lj_first=1
+    for _ld in "${STRATA}"/*; do
+        [ -d "$_ld" ] || continue; _ln="$(basename "$_ld")"
+        [ "$_lj_first" = 1 ] || printf ','; _lj_first=0
+        _len="false"; is_enabled "$_ln" && _len="true"
+        _lpin="false"; is_pinned "$_ln" && _lpin="true"
+        _linit="false"; [ "$_ln" = "$(init_stratum)" ] && _linit="true"
+        printf '{"name":"%s","enabled":%s,"pinned":%s,"init":%s}' "$_ln" "$_len" "$_lpin" "$_linit"
+    done
+    printf ']\n'
+}
+
 # brl subcommands — list all subcommands (official parity)
 brl_subcommands() {
     for _sc in list status show fetch fetch-url apply install update copy \
-               enable disable remove rename which reload umount \
+               enable disable remove rename alias unalias which reload umount \
                fix deps hijack unhijack report update-urls tutorial \
-               capabilities security integrate boot-init rollback verify health \
+               capabilities security pin export import-tar config self-update integrate boot-init init-install init-uninstall init-status rollback verify health \
                test register-aok archs subcommands version help; do
         echo "$_sc"
     done
@@ -1919,6 +2212,149 @@ SDCONF
     braok_log info "systemd units installed; PID 1 made Bedrock-aware"
 }
 
+# ── PID 1: Bedrock init supervisor ──────────────────────────────────────
+# Opt-in (brl init-install). Installs a shim as /sbin/init that becomes PID 1,
+# performs Bedrock early setup, then exec()s the REAL systemd so systemd still
+# runs as PID 1 afterward. This is a supervisor+handoff, NOT a systemd
+# replacement — if anything is wrong, the shim falls back to the real init so
+# the system always boots.
+BEDROCK_INIT="${BR}/libexec/bedrock-init"
+_find_real_init() {
+    # Locate the genuine init (systemd) without following our own shim.
+    for _ri in /lib/systemd/systemd /usr/lib/systemd/systemd /sbin/init.real \
+               /sbin/init.bedrock-orig /usr/sbin/init; do
+        [ -x "$_ri" ] && { echo "$_ri"; return 0; }
+    done
+    # Last resort: whatever /sbin/init.real points to
+    [ -x /sbin/init.real ] && { echo /sbin/init.real; return 0; }
+    return 1
+}
+braok_write_init_shim() {
+    mkdir -p "${BR}/libexec" 2>/dev/null || true
+    cat > "$BEDROCK_INIT" <<'INITEOF'
+#!/bin/sh
+# Bedrock-AOK PID 1 supervisor.
+# Runs as the very first userspace process, does Bedrock early setup, then
+# hands off to the real systemd via exec so systemd becomes PID 1.
+# SAFETY: every Bedrock step is best-effort; the final exec ALWAYS runs. If the
+# real init cannot be found or Bedrock setup fails, we still exec an init so the
+# machine boots.
+BR=/bedrock
+log() { printf '[bedrock-init] %s\n' "$*" 2>/dev/null || true; }
+
+# 1) Minimal early filesystem scaffolding (never fatal).
+for d in /proc /sys /dev /dev/pts /dev/shm /run /tmp; do [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || true; done
+mountpoint -q /proc 2>/dev/null || mount -t proc proc /proc 2>/dev/null || true
+mountpoint -q /sys  2>/dev/null || mount -t sysfs sys /sys 2>/dev/null || true
+mountpoint -q /run  2>/dev/null || mount -t tmpfs tmpfs /run 2>/dev/null || true
+
+# 2) Bedrock bring-up (best-effort, time-boxed, never blocks boot).
+if [ -x "$BR/bin/brl" ]; then
+    ( "$BR/bin/brl" boot-init >/dev/null 2>&1 ) &
+    _bp=$!
+    ( sleep 15; kill "$_bp" 2>/dev/null ) 2>/dev/null &
+    wait "$_bp" 2>/dev/null || true
+    log "bedrock boot-init done"
+fi
+
+# 3) Locate the REAL init and hand off. This MUST succeed to avoid a panic.
+REAL=""
+for c in /lib/systemd/systemd /usr/lib/systemd/systemd /sbin/init.bedrock-orig \
+         /sbin/init.real /usr/sbin/init; do
+    [ -x "$c" ] && { REAL="$c"; break; }
+done
+if [ -n "$REAL" ]; then
+    log "handing off to $REAL as PID 1"
+    export BEDROCK=1 BEDROCK_STRATUM=bedrock
+    exec "$REAL" "$@"
+fi
+# Absolute fallback: try common shells so we never panic PID 1.
+log "no real init found — emergency shell"
+for s in /bin/sh /bin/bash /sbin/init; do [ -x "$s" ] && exec "$s"; done
+# If even that fails, sleep forever rather than exit (exit of PID1 = panic).
+while : ; do sleep 3600; done
+INITEOF
+    chmod 0755 "$BEDROCK_INIT" 2>/dev/null || true
+}
+braok_install_init() {
+    need_root
+    say ""; print_logo "Bedrock-AOK PID 1 init"
+    warn "${color_priority}This makes Bedrock the first userspace process (PID 1).${color_norm}"
+    warn "A rollback point is created; the real systemd is preserved and still"
+    warn "runs as PID 1 after Bedrock's handoff. If anything is wrong, the shim"
+    warn "falls back to the real init so the system still boots."
+    # 0) safety: must find the real init BEFORE we touch anything
+    _ri="$(_find_real_init)" || { err "cannot locate real systemd/init — refusing to install PID1 shim"; return 1; }
+    notice "real init: ${color_file}${_ri}${color_norm}"
+    braok_rollback_create "pre-init-install" >/dev/null 2>&1 || true
+    braok_write_init_shim
+    sh -n "$BEDROCK_INIT" 2>/dev/null || { err "generated init shim failed syntax check — aborting"; return 1; }
+
+    # 1) Preserve the real init under a stable name the shim looks for.
+    if [ -e /sbin/init ] && [ ! -e /sbin/init.bedrock-orig ]; then
+        if [ -L /sbin/init ]; then
+            _tgt="$(readlink -f /sbin/init 2>/dev/null)"
+            [ -n "$_tgt" ] && ln -sf "$_tgt" /sbin/init.bedrock-orig 2>/dev/null || true
+        else
+            cp -a /sbin/init /sbin/init.bedrock-orig 2>/dev/null || true
+        fi
+        notice "preserved original init as /sbin/init.bedrock-orig"
+    fi
+    # If /sbin/init.bedrock-orig still absent, point it straight at systemd.
+    [ -e /sbin/init.bedrock-orig ] || ln -sf "$_ri" /sbin/init.bedrock-orig 2>/dev/null || true
+
+    # 2) Install the shim as /sbin/init (atomically via temp+mv).
+    cp -f "$BEDROCK_INIT" /sbin/init.bedrock-new 2>/dev/null && \
+        mv -f /sbin/init.bedrock-new /sbin/init 2>/dev/null && \
+        ok "installed Bedrock init as /sbin/init (PID 1 on next boot)" || {
+            err "failed to install /sbin/init — original left intact"; return 1; }
+
+    # 3) Keep the systemd unit path working too (belt and suspenders).
+    braok_install_units 2>/dev/null || true
+    notice "Reboot to boot via Bedrock init. Verify with: ${color_cmd}brl init-status${color_norm}"
+    braok_log warn "PID1 init shim installed (real init: ${_ri})"
+}
+braok_uninstall_init() {
+    need_root
+    if [ -e /sbin/init.bedrock-orig ]; then
+        if [ -L /sbin/init.bedrock-orig ]; then
+            _o="$(readlink -f /sbin/init.bedrock-orig 2>/dev/null)"
+            [ -n "$_o" ] && ln -sf "$_o" /sbin/init 2>/dev/null || true
+        else
+            cp -a /sbin/init.bedrock-orig /sbin/init 2>/dev/null || true
+        fi
+        rm -f /sbin/init.bedrock-orig 2>/dev/null || true
+        ok "restored original /sbin/init (systemd is PID 1 again on next boot)"
+    else
+        # No backup: point init at systemd directly.
+        _ri="$(_find_real_init)" && ln -sf "$_ri" /sbin/init 2>/dev/null && ok "pointed /sbin/init at ${_ri}" || warn "could not restore /sbin/init"
+    fi
+    rm -f "$BEDROCK_INIT" 2>/dev/null || true
+    braok_log warn "PID1 init shim removed"
+}
+brl_init_status() {
+    print_logo "Bedrock-AOK init status"
+    _p1="$(ps -p 1 -o comm= 2>/dev/null || cat /proc/1/comm 2>/dev/null || echo unknown)"
+    say "  current PID 1 process:  ${color_strat}${_p1}${color_norm}"
+    if [ -e /sbin/init ]; then
+        _it="$(readlink -f /sbin/init 2>/dev/null || echo /sbin/init)"
+        # Detect our shim by its marker, regardless of path resolution.
+        if grep -q 'Bedrock-AOK PID 1 supervisor' /sbin/init 2>/dev/null; then
+            ok "/sbin/init is the Bedrock init shim (active on next boot)"
+        else
+            info "/sbin/init -> ${_it} (Bedrock init shim NOT installed)"
+        fi
+        [ -x "$BEDROCK_INIT" ] && say "  shim present: ${color_file}${BEDROCK_INIT}${color_norm}"
+    fi
+    [ -e /sbin/init.bedrock-orig ] && ok "original init preserved: /sbin/init.bedrock-orig" || info "no preserved original init recorded"
+    _ri="$(_find_real_init 2>/dev/null || echo none)"; say "  real systemd/init: ${color_file}${_ri}${color_norm}"
+    say ""
+    say "Model: Bedrock init becomes PID 1, does early setup, then exec()s the real"
+    say "systemd — so systemd runs as PID 1 after handoff. Falls back to the real"
+    say "init if anything is wrong, so the system always boots."
+}
+
+
 # ── AOK roots integration ───────────────────────────────────────────────
 # Register existing /AOK/roots as Bedrock strata (additive; never deletes AOK data).
 braok_register_aok() {
@@ -1965,6 +2401,18 @@ brl_test() {
     _t "verify_sha256 detects match" "_tf1=\$(mktemp); echo bedrock>\$_tf1; _th=\$(_sha256 \$_tf1); verify_sha256 \$_tf1 \$_th"
     _t "verify_sha256 rejects mismatch" "_tf2=\$(mktemp); echo bedrock>\$_tf2; ! verify_sha256 \$_tf2 deadbeef"
     _t "CA bundle present"       "_have_ca_bundle"
+    say "${B}v1.2.0 features${Z}"
+    _t "config set/get roundtrip" "brl_config set test.k testval >/dev/null 2>&1; [ \"\$(brl_config get test.k 2>/dev/null)\" = testval ]"
+    _t "pin file writable"       "touch \"\$(_pin_file)\" 2>/dev/null"
+    _t "list --json valid"       "brl_list_json | grep -q '\\['"
+    _t "safe tmp dir created"    "[ -d \"\$(_mktemp_dir)\" ]"
+    _t "gpg verify advisory-ok"  "_gtf=\$(mktemp); verify_gpg \$_gtf https://example/none 2>/dev/null"
+    _t "init shim generates + valid" "braok_write_init_shim && sh -n '$BEDROCK_INIT'"
+    _t "real init locatable"     "_find_real_init"
+    say "${B}Fidelity (aliases / which)${Z}"
+    _t "deref passes through name" "[ \"\$(deref nonexistent-xyz 2>/dev/null || echo nonexistent-xyz)\" = nonexistent-xyz ]"
+    _t "which --file resolves init" "brl_which --file /etc/hostname >/dev/null 2>&1"
+    _t "which --pid 1 resolves"   "brl_which --pid 1 >/dev/null 2>&1"
     say "${B}Namespaces / mounts${Z}"
     _t "mount ns unshare works"  "has unshare && unshare -m /bin/true"
     _t "uts ns unshare works"    "has unshare && unshare -u /bin/true"
@@ -2092,6 +2540,7 @@ case "$_cmd" in
     show)          brl_show "$@" ;; copy) brl_copy "$@" ;;
     enable|retain) brl_enable "$@" ;; disable) brl_disable "$@" ;;
     remove|deref)  brl_remove "$@" ;; rename) brl_rename "$@" ;;
+    alias)         brl_alias "$@" ;; unalias) brl_unalias "$@" ;;
     update)        brl_update "$@" ;; update-urls) brl_update_urls "$@" ;;
     install|import) brl_install "$@" ;;
     reload)        brl_reload "$@" ;; umount|unmount) cmd_umount "$@" ;;
@@ -2105,14 +2554,23 @@ case "$_cmd" in
     archs)         brl_archs ;;
     capabilities|caps) brl_capabilities "$@" ;;
     security)      brl_security "$@" ;;
+    pin)           brl_pin "$@" ;;
+    export)        brl_export "$@" ;;
+    import-tar)    brl_import_tar "$@" ;;
+    config)        brl_config "$@" ;;
+    self-update)   brl_self_update "$@" ;;
     integrate)     brl_integrate "$@" ;;
     boot-init)     braok_boot_init ;;
+    init-install)  braok_install_init "$@" ;;
+    init-uninstall) braok_uninstall_init "$@" ;;
+    init-status)   brl_init_status "$@" ;;
     rollback)      brl_rollback "$@" ;;
     verify|integrity) brl_verify "$@" ;;
     health)        brl_health "$@" ;;
     test|selftest) brl_test "$@" ;;
     register-aok)  brl_register_aok "$@" ;;
     --hijack|--update|--force-update|--restat) run_installer "$_cmd" "$@" ;;
-    version|--version|-v) brl_version ;; help|--help|-h) brl_help ;;
+    version|--version|-v) brl_version ;;
+    help|--help|-h) if [ "$#" -ge 1 ]; then brl_help_cmd "$1"; else brl_help; fi ;;
     *) err "unknown: $_cmd"; brl_help; exit 1 ;;
 esac
