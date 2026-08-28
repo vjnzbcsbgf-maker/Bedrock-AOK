@@ -1176,7 +1176,10 @@ cmd_strat() {
     stratum_exists "$_sn" || die "no such stratum: '$_sn' (see: brl list)"
     _sn="$(deref "$_sn" 2>/dev/null || echo "$_sn")"
     if [ "$_sn" = "$(init_stratum)" ]; then [ "$#" -ge 1 ] || set -- "${SHELL:-/bin/sh}"; exec "$@"; fi
-    _sroot="${STRATA}/${_sn}"
+    # Resolve the stratum to its real path before chroot(2): AOK roots are
+    # registered as symlinks under ${STRATA}, and some iSH-AOK builds fail to
+    # chroot through the symlink into the live rootfs.
+    _sroot="$(readlink -f "${STRATA}/${_sn}" 2>/dev/null || echo "${STRATA}/${_sn}")"
     has chroot || die "chroot unavailable."
     _force_dns "$_sroot"
     _ssh="$(_stratum_shell "$_sroot")"
@@ -1550,6 +1553,28 @@ brl_unhijack() {
     done
     has systemctl && systemctl daemon-reload 2>/dev/null || true
     step "Finalizing"; notice "Hijack reverted (strata under ${STRATA} are untouched)"; say ""
+}
+# Write the fastfetch/brl report helper scripts under ${BR}/bin. Called from
+# _install_ff() (hijack) and brl_hijack(); kept here so both scripts share it.
+_write_helpers() {
+    mkdir -p "${BR}/bin" 2>/dev/null || true
+    cat > "${BR}/bin/brl-mem" <<'SH'
+#!/bin/sh
+free -m 2>/dev/null | awk -F'[ :]+' '/^Mem:/{printf "%dMiB / %dMiB", $3, $2}'
+SH
+    cat > "${BR}/bin/brl-swap" <<'SH'
+#!/bin/sh
+free -m 2>/dev/null | awk -F'[ :]+' '/^Swap:/{printf "%dMiB / %dMiB", $3, $2}'
+SH
+    cat > "${BR}/bin/brl-disk" <<'SH'
+#!/bin/sh
+df -hP / 2>/dev/null | awk 'NR==2{printf "%s / %s (%s)", $3, $2, $5}'
+SH
+    cat > "${BR}/bin/brl-strata" <<'SH'
+#!/bin/sh
+ls -1 /bedrock/run/enabled_strata 2>/dev/null | sed 's/^/  /' || echo none
+SH
+    chmod 0755 "${BR}/bin/brl-mem" "${BR}/bin/brl-swap" "${BR}/bin/brl-disk" "${BR}/bin/brl-strata" 2>/dev/null || true
 }
 _install_ff() {
     _write_helpers
@@ -2391,10 +2416,17 @@ brl_register_aok() { need_root; braok_register_aok; brl_reload >/dev/null 2>&1 |
 
 # ── regression / self-test suite ────────────────────────────────────────
 brl_test() {
-    _tp=0; _tf=0
+    _tp=0; _tf=0; _ts=0
     _t() { # name, condition-cmd
         if eval "$2" >/dev/null 2>&1; then printf "  ${color_okay}PASS${color_norm} %s\n" "$1"; _tp=$((_tp+1))
         else printf "  ${color_alert}FAIL${color_norm} %s\n" "$1"; _tf=$((_tf+1)); fi
+    }
+    _s() { # name — advisory skip (capability unavailable on this kernel)
+        printf "  ${color_warn}SKIP${color_norm} %s\n" "$1"; _ts=$((_ts+1))
+    }
+    _tk() { # cap-name, test-name, condition-cmd — run or skip by capability
+        local _ck; _ck="$(cap_of "$1" 2>/dev/null)"
+        case "$_ck" in unavailable|disabled) _s "$2 (unavailable on this kernel)";; *) _t "$2" "$3";; esac
     }
     print_logo "Bedrock-AOK self-test"
     say "${B}Environment${Z}"
@@ -2424,23 +2456,32 @@ brl_test() {
     _t "safe tmp dir created"    "[ -d \"\$(_mktemp_dir)\" ]"
     _t "gpg verify advisory-ok"  "_gtf=\$(mktemp); verify_gpg \$_gtf https://example/none 2>/dev/null"
     _t "init shim generates + valid" "braok_write_init_shim && sh -n '$BEDROCK_INIT'"
-    _t "real init locatable"     "_find_real_init"
+    # The real init only exists on hosts with systemd/init present; iSH-AOK
+    # has no init at all, so this is advisory rather than a hard failure.
+    if _find_real_init >/dev/null 2>&1; then
+        _t "real init locatable"     "_find_real_init"
+    else
+        _s "real init locatable (no systemd/init on this host)"
+    fi
     say "${B}Fidelity (aliases / which)${Z}"
     _t "deref passes through name" "[ \"\$(deref nonexistent-xyz 2>/dev/null || echo nonexistent-xyz)\" = nonexistent-xyz ]"
     _t "which --file resolves init" "brl_which --file /etc/hostname >/dev/null 2>&1"
     _t "which --pid 1 resolves"   "brl_which --pid 1 >/dev/null 2>&1"
     say "${B}Namespaces / mounts${Z}"
-    _t "mount ns unshare works"  "has unshare && unshare -m /bin/true"
-    _t "uts ns unshare works"    "has unshare && unshare -u /bin/true"
-    _t "ipc ns unshare works"    "has unshare && unshare -i /bin/true"
-    _t "pid ns unshare works"    "has unshare && unshare -pf /bin/true"
-    _t "net ns unshare works"    "has unshare && unshare -n /bin/true"
-    _t "user ns unshare works"   "has unshare && unshare -U /bin/true"
-    _t "cgroup ns unshare works" "has unshare && unshare -C /bin/true"
-    _t "bind mount in private ns" "has unshare && has mount && unshare -m /bin/sh -c '_a=\$(mktemp -d) _b=\$(mktemp -d); echo hi>\"\$_a/f\"; mount --bind \"\$_a\" \"\$_b\" && [ -f \"\$_b/f\" ]'"
-    _t "tmpfs mount in private ns" "has unshare && has mount && unshare -m /bin/sh -c '_t=\$(mktemp -d); mount -t tmpfs none \"\$_t\" && echo x>\"\$_t/x\" && [ -f \"\$_t/x\" ]'"
-    _t "procfs live (Pid: field)" "grep -q '^Pid:' /proc/self/status"
-    _t "sysfs populated"         "[ -n \"\$(ls -A /sys 2>/dev/null)\" ]"
+    # Namespace tests cannot pass on kernels without the capability (iSH-AOK
+    # exposes only what its emulated kernel supports); consult the recorded
+    # capabilities so healthy builds do not fail the self-test.
+    _tk mount_ns   "mount ns unshare works"  "has unshare && unshare -m /bin/true"
+    _tk uts_ns     "uts ns unshare works"    "has unshare && unshare -u /bin/true"
+    _tk ipc_ns     "ipc ns unshare works"    "has unshare && unshare -i /bin/true"
+    _tk pid_ns     "pid ns unshare works"    "has unshare && unshare -pf /bin/true"
+    _tk net_ns     "net ns unshare works"    "has unshare && unshare -n /bin/true"
+    _tk user_ns    "user ns unshare works"   "has unshare && unshare -U /bin/true"
+    _tk cgroup_ns  "cgroup ns unshare works" "has unshare && unshare -C /bin/true"
+    _tk mount_ns   "bind mount in private ns" "has unshare && has mount && unshare -m /bin/sh -c '_a=\$(mktemp -d) _b=\$(mktemp -d); echo hi>\"\$_a/f\"; mount --bind \"\$_a\" \"\$_b\" && [ -f \"\$_b/f\" ]'"
+    _tk mount_ns   "tmpfs mount in private ns" "has unshare && has mount && unshare -m /bin/sh -c '_t=\$(mktemp -d); mount -t tmpfs none \"\$_t\" && echo x>\"\$_t/x\" && [ -f \"\$_t/x\" ]'"
+    _tk procfs     "procfs live (Pid: field)" "grep -q '^Pid:' /proc/self/status"
+    _tk sysfs      "sysfs populated"         "[ -n \"\$(ls -A /sys 2>/dev/null)\" ]"
     _t "devpts / ptmx present"   "[ -e /dev/ptmx ]"
     _t "signals deliverable"     "sh -c 'kill -0 \$\$'"
     # strat round-trip if any stratum with a real shell exists
@@ -2453,8 +2494,8 @@ brl_test() {
         _t "brl which resolves sh" "'${BR}/bin/brl' which sh"
     fi
     say ""
-    if [ "$_tf" = 0 ]; then ok "all ${_tp} tests passed"; else warn "${_tp} passed, ${color_alert}${_tf} failed${color_norm}"; fi
-    braok_log info "self-test: ${_tp} pass ${_tf} fail"
+    if [ "$_tf" = 0 ]; then ok "${_tp} passed, ${_ts} skipped"; else warn "${_tp} passed, ${_ts} skipped, ${color_alert}${_tf} failed${color_norm}"; fi
+    braok_log info "self-test: ${_tp} pass ${_ts} skip ${_tf} fail"
     [ "$_tf" = 0 ]
 }
 
