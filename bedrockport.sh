@@ -1609,6 +1609,28 @@ PD
     say ""
 }
 brl_unhijack() { die "permanent installation — use the brl-uninstall script to fully remove."; }
+# Write the fastfetch/brl report helper scripts under ${BR}/bin. Called from
+# _install_ff() (hijack) and brl_hijack(); kept here so both scripts share it.
+_write_helpers() {
+    mkdir -p "${BR}/bin" 2>/dev/null || true
+    cat > "${BR}/bin/brl-mem" <<'SH'
+#!/bin/sh
+free -m 2>/dev/null | awk -F'[ :]+' '/^Mem:/{printf "%dMiB / %dMiB", $3, $2}'
+SH
+    cat > "${BR}/bin/brl-swap" <<'SH'
+#!/bin/sh
+free -m 2>/dev/null | awk -F'[ :]+' '/^Swap:/{printf "%dMiB / %dMiB", $3, $2}'
+SH
+    cat > "${BR}/bin/brl-disk" <<'SH'
+#!/bin/sh
+df -hP / 2>/dev/null | awk 'NR==2{printf "%s / %s (%s)", $3, $2, $5}'
+SH
+    cat > "${BR}/bin/brl-strata" <<'SH'
+#!/bin/sh
+ls -1 /bedrock/run/enabled_strata 2>/dev/null | sed 's/^/  /' || echo none
+SH
+    chmod 0755 "${BR}/bin/brl-mem" "${BR}/bin/brl-swap" "${BR}/bin/brl-disk" "${BR}/bin/brl-strata" 2>/dev/null || true
+}
 _install_ff() {
     _write_helpers
     _fc="${HOME}/.config/fastfetch"; mkdir -p "$_fc"
