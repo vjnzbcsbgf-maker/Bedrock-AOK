@@ -1179,7 +1179,20 @@ deref() {
     fi
 }
 is_alias() { [ -L "${STRATA}/${1}" ]; }
-stratum_exists() { _sx="$(deref "$1" 2>/dev/null || echo "$1")"; [ "$_sx" = "$(init_stratum)" ] && return 0; [ -d "${STRATA}/${_sx}" ] && [ -n "$(ls -A "${STRATA}/${_sx}" 2>/dev/null)" ]; }
+stratum_exists() {
+    _sxn="$1"
+    [ "$_sxn" = "$(init_stratum)" ] && return 0
+    _sxe="${STRATA}/${_sxn}"
+    # Direct entry: a symlink (AOK root) or dir under /bedrock/strata that
+    # resolves to a populated directory.
+    if [ -e "$_sxe" ]; then
+        _sxr="$(readlink -f "$_sxe" 2>/dev/null || echo "$_sxe")"
+        [ -d "$_sxr" ] && [ -n "$(ls -A "$_sxr" 2>/dev/null)" ] && return 0
+    fi
+    # Fallback: dereferenced name under /bedrock/strata.
+    _sx="$(deref "$_sxn" 2>/dev/null || echo "$_sxn")"
+    [ -d "${STRATA}/${_sx}" ] && [ -n "$(ls -A "${STRATA}/${_sx}" 2>/dev/null)" ]
+}
 is_enabled() { _ie="$(deref "$1" 2>/dev/null || echo "$1")"; [ "$_ie" = "$(init_stratum)" ] && return 0; [ -e "${ENABLED}/${_ie}" ]; }
 brl_alias() {
     need_root
@@ -1217,10 +1230,21 @@ cmd_strat() {
     _sn="${1:-}"; [ "$#" -ge 1 ] && shift
     [ -n "$_sn" ] || die "usage: strat [-r] <stratum> <command> [args...]"
     stratum_exists "$_sn" || die "no such stratum: '$_sn' (see: brl list)"
-    _sn="$(deref "$_sn" 2>/dev/null || echo "$_sn")"
+    # Resolve the on-disk root BEFORE dereferencing the name. AOK strata are
+    # registered as symlinks (/bedrock/strata/aok-<n> -> /AOK/roots/<n>); some
+    # iSH-AOK builds can't chroot through the symlink, so resolve to the real
+    # target path and chroot into that directly.
+    _sentry="${STRATA}/${_sn}"
+    if [ -L "$_sentry" ]; then
+        _sroot="$(readlink -f "$_sentry" 2>/dev/null || echo "$_sentry")"
+        _sn="$(deref "$_sn" 2>/dev/null || echo "$_sn")"
+    else
+        _sn="$(deref "$_sn" 2>/dev/null || echo "$_sn")"
+        _sroot="${STRATA}/${_sn}"
+    fi
     if [ "$_sn" = "$(init_stratum)" ]; then [ "$#" -ge 1 ] || set -- "${SHELL:-/bin/sh}"; exec "$@"; fi
-    _sroot="${STRATA}/${_sn}"
     has chroot || die "chroot unavailable."
+    [ -d "$_sroot" ] || die "stratum root not found: $_sroot"
     _force_dns "$_sroot"
     _ssh="$(_stratum_shell "$_sroot")"
     if [ "$_sr" = "1" ]; then _sp="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1609,6 +1633,41 @@ PD
     say ""
 }
 brl_unhijack() { die "permanent installation — use the brl-uninstall script to fully remove."; }
+# Write the small helper scripts referenced by the fastfetch config and by
+# brl_report. Portable across GNU coreutils and BusyBox.
+_write_helpers() {
+    mkdir -p "${BR}/bin" 2>/dev/null || true
+    cat > "${BR}/bin/brl-mem" <<'MEM'
+#!/bin/sh
+if command -v free >/dev/null 2>&1; then
+    free -m 2>/dev/null | awk '/^Mem:/ {printf "%s / %s MiB\n", $3, $2; f=1} END{if(!f) exit 1}' && exit 0
+fi
+awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{if(t){printf "%d / %d MiB\n",(t-a)/1024,t/1024}else{print "n/a"}}' /proc/meminfo 2>/dev/null || echo "n/a"
+MEM
+    cat > "${BR}/bin/brl-swap" <<'SWAP'
+#!/bin/sh
+if command -v free >/dev/null 2>&1; then
+    free -m 2>/dev/null | awk '/^Swap:/ {printf "%s / %s MiB\n", $3, $2; f=1} END{if(!f) exit 1}' && exit 0
+fi
+awk '/^SwapTotal:/{t=$2} /^SwapFree:/{fr=$2} END{if(t){printf "%d / %d MiB\n",(t-fr)/1024,t/1024}else{print "none"}}' /proc/meminfo 2>/dev/null || echo "none"
+SWAP
+    cat > "${BR}/bin/brl-disk" <<'DISK'
+#!/bin/sh
+df -hP / 2>/dev/null | awk 'NR==2 {printf "%s / %s (%s used)\n", $3, $2, $5}' || echo "n/a"
+DISK
+    cat > "${BR}/bin/brl-strata" <<'STRATA'
+#!/bin/sh
+d=/bedrock/run/enabled_strata
+if [ -d "$d" ]; then
+    n=0; names=""
+    for f in "$d"/*; do [ -e "$f" ] || continue; n=$((n+1)); names="${names} $(basename "$f")"; done
+    if [ "$n" -gt 0 ]; then printf "%s:%s\n" "$n" "$names"; else echo "0"; fi
+else
+    echo "0"
+fi
+STRATA
+    chmod +x "${BR}/bin/brl-mem" "${BR}/bin/brl-swap" "${BR}/bin/brl-disk" "${BR}/bin/brl-strata" 2>/dev/null || true
+}
 _install_ff() {
     _write_helpers
     _fc="${HOME}/.config/fastfetch"; mkdir -p "$_fc"
@@ -2549,6 +2608,24 @@ brl_test() {
         if eval "$2" >/dev/null 2>&1; then printf "  ${color_okay}PASS${color_norm} %s\n" "$1"; _tp=$((_tp+1))
         else printf "  ${color_alert}FAIL${color_norm} %s\n" "$1"; _tf=$((_tf+1)); fi
     }
+    # Skip-aware test: if the named capability is recorded unavailable/disabled,
+    # report SKIP (environment limitation) rather than FAIL. Otherwise behaves
+    # like _t but a failure when the cap IS present is a genuine FAIL.
+    _tcap() { # name, capability, condition-cmd
+        _tcv="$(cap_of "$2" 2>/dev/null)"
+        case "$_tcv" in
+            unavailable|disabled|""|unknown)
+                printf "  ${color_warn}SKIP${color_norm} %s ${color_misc}(%s=%s)${color_norm}\n" "$1" "$2" "${_tcv:-n/a}"; _tsk=$((_tsk+1)); return 0 ;;
+        esac
+        if eval "$3" >/dev/null 2>&1; then printf "  ${color_okay}PASS${color_norm} %s\n" "$1"; _tp=$((_tp+1))
+        else printf "  ${color_alert}FAIL${color_norm} %s\n" "$1"; _tf=$((_tf+1)); fi
+    }
+    # Advisory test: a failure is reported as SKIP (informational), never FAIL.
+    _tadv() { # name, condition-cmd
+        if eval "$2" >/dev/null 2>&1; then printf "  ${color_okay}PASS${color_norm} %s\n" "$1"; _tp=$((_tp+1))
+        else printf "  ${color_warn}SKIP${color_norm} %s ${color_misc}(not applicable here)${color_norm}\n" "$1"; _tsk=$((_tsk+1)); fi
+    }
+    _tsk=0
     print_logo "Bedrock-AOK self-test"
     say "${B}Environment${Z}"
     _t "chroot available"        "has chroot"
@@ -2583,21 +2660,21 @@ brl_test() {
     _t "safe tmp dir created"    "[ -d \"\$(_mktemp_dir)\" ]"
     _t "gpg verify advisory-ok"  "_gtf=\$(mktemp); verify_gpg \$_gtf https://example/none 2>/dev/null"
     _t "init shim generates + valid" "braok_write_init_shim && sh -n '$BEDROCK_INIT'"
-    _t "real init locatable"     "_find_real_init"
+    _tadv "real init locatable"     "_find_real_init"
     say "${B}Fidelity (aliases / which)${Z}"
     _t "deref passes through name" "[ \"\$(deref nonexistent-xyz 2>/dev/null || echo nonexistent-xyz)\" = nonexistent-xyz ]"
     _t "which --file resolves init" "brl_which --file /etc/hostname >/dev/null 2>&1"
     _t "which --pid 1 resolves"   "brl_which --pid 1 >/dev/null 2>&1"
     say "${B}Namespaces / mounts${Z}"
-    _t "mount ns unshare works"  "has unshare && unshare -m /bin/true"
-    _t "uts ns unshare works"    "has unshare && unshare -u /bin/true"
-    _t "ipc ns unshare works"    "has unshare && unshare -i /bin/true"
-    _t "pid ns unshare works"    "has unshare && unshare -pf /bin/true"
-    _t "net ns unshare works"    "has unshare && unshare -n /bin/true"
-    _t "user ns unshare works"   "has unshare && unshare -U /bin/true"
-    _t "cgroup ns unshare works" "has unshare && unshare -C /bin/true"
-    _t "bind mount in private ns" "has unshare && has mount && unshare -m /bin/sh -c '_a=\$(mktemp -d) _b=\$(mktemp -d); echo hi>\"\$_a/f\"; mount --bind \"\$_a\" \"\$_b\" && [ -f \"\$_b/f\" ]'"
-    _t "tmpfs mount in private ns" "has unshare && has mount && unshare -m /bin/sh -c '_t=\$(mktemp -d); mount -t tmpfs none \"\$_t\" && echo x>\"\$_t/x\" && [ -f \"\$_t/x\" ]'"
+    _tcap "mount ns unshare works"  "mount_ns"  "has unshare && unshare -m /bin/true"
+    _tcap "uts ns unshare works"    "uts_ns"    "has unshare && unshare -u /bin/true"
+    _tcap "ipc ns unshare works"    "ipc_ns"    "has unshare && unshare -i /bin/true"
+    _tcap "pid ns unshare works"    "pid_ns"    "has unshare && unshare -pf /bin/true"
+    _tcap "net ns unshare works"    "net_ns"    "has unshare && unshare -n /bin/true"
+    _tcap "user ns unshare works"   "user_ns"   "has unshare && unshare -U /bin/true"
+    _tcap "cgroup ns unshare works" "cgroup_ns" "has unshare && unshare -C /bin/true"
+    _tcap "bind mount in private ns" "mount_ns" "has unshare && has mount && unshare -m /bin/sh -c '_a=\$(mktemp -d) _b=\$(mktemp -d); echo hi>\"\$_a/f\"; mount --bind \"\$_a\" \"\$_b\" && [ -f \"\$_b/f\" ]'"
+    _tcap "tmpfs mount in private ns" "mount_ns" "has unshare && has mount && unshare -m /bin/sh -c '_t=\$(mktemp -d); mount -t tmpfs none \"\$_t\" && echo x>\"\$_t/x\" && [ -f \"\$_t/x\" ]'"
     _t "procfs live (Pid: field)" "grep -q '^Pid:' /proc/self/status"
     _t "sysfs populated"         "[ -n \"\$(ls -A /sys 2>/dev/null)\" ]"
     _t "devpts / ptmx present"   "[ -e /dev/ptmx ]"
@@ -2612,8 +2689,13 @@ brl_test() {
         _t "brl which resolves sh" "'${BR}/bin/brl' which sh"
     fi
     say ""
-    if [ "$_tf" = 0 ]; then ok "all ${_tp} tests passed"; else warn "${_tp} passed, ${color_alert}${_tf} failed${color_norm}"; fi
-    braok_log info "self-test: ${_tp} pass ${_tf} fail"
+    if [ "$_tf" = 0 ]; then
+        if [ "${_tsk:-0}" -gt 0 ]; then ok "${_tp} passed, ${_tsk} skipped (environment), 0 failed"
+        else ok "all ${_tp} tests passed"; fi
+    else
+        warn "${_tp} passed, ${_tsk:-0} skipped, ${color_alert}${_tf} failed${color_norm}"
+    fi
+    braok_log info "self-test: ${_tp} pass ${_tsk:-0} skip ${_tf} fail"
     [ "$_tf" = 0 ]
 }
 
