@@ -1,6 +1,6 @@
 #!/bin/sh
 # ============================================================================
-#  Bedrock Linux — iSH-AOK port  (brl / strat)   bedrock-port  v1.2.0 [REVERSIBLE]
+#  Bedrock Linux — iSH-AOK port  (brl / strat)   bedrock-port  v1.3.0 [REVERSIBLE]
 #  Faithful reimplementation of Bedrock Linux for iSH-AOK (iOS ARM64/aarch64).
 #
 #  Mixes packages from many distributions as "strata". Uses chroot + bind
@@ -14,14 +14,15 @@
 #  v1.2.0 adds: parallel apply, stratum pin/export/import, config get/set,
 #  gpg rootfs verification, JSON output, self-update, per-command help.
 #
+#  PERMANENT edition: unhijack is blocked (use brl-uninstall to fully remove).
+#  Reversible twin is 'brl' (identical features, working unhijack).
 #  Invoke:  brl <command> [args]   |   strat [-r] <stratum> <cmd>
-#  REVERSIBLE edition: 'brl unhijack' cleanly reverts. Permanent twin is
-#  'bedrock-port.sh' (identical features, unhijack blocked).
+#  Install: ./bedrock-port.sh --hijack   (see --help)
 # ============================================================================
 set -u
 umask 022                       # safe default perms for anything we create
 
-BRL_PORT_VERSION="1.2.0"
+BRL_PORT_VERSION="1.3.0"
 BR="/bedrock"
 STRATA="${BR}/strata"
 CROSSBIN="${BR}/cross/bin"
@@ -351,7 +352,7 @@ EOF
 }
 
 # ============================================================================
-#  CATALOG — 29 distros, every URL verified from live directory listing
+#  CATALOG — 29 distros (multi-arch via LXC), every URL verified from live directory listing
 # ============================================================================
 
 catalog_names() {
@@ -359,7 +360,8 @@ catalog_names() {
 fedora rockylinux almalinux oracle centos openeuler \
 opensuse archlinux arch void gentoo \
 amazonlinux openwrt alt busybox \
-chimera apertis springdale funtoo"
+chimera apertis springdale funtoo \
+slackware mageia nixos manjaro"
 }
 catalog_desc() {
     case "$1" in
@@ -388,6 +390,10 @@ catalog_desc() {
         apertis)     echo "Apertis (apt) — Debian-based — ~80 MB" ;;
         springdale)  echo "Springdale (dnf) — RHEL clone — ~100 MB" ;;
         funtoo)      echo "Funtoo (portage) — ~300 MB" ;;
+        slackware)   echo "Slackware (slackpkg) — classic — ~200 MB" ;;
+        mageia)      echo "Mageia (dnf/urpmi) — ~120 MB" ;;
+        nixos)       echo "NixOS (nix) — declarative — ~150 MB" ;;
+        manjaro)     echo "Manjaro (pacman) — Arch-based — ~200 MB" ;;
         *)           echo "" ;;
     esac
 }
@@ -418,21 +424,43 @@ catalog_recipe() {
         apertis)     echo "lxc:apertis:v2024" ;;
         springdale)  echo "lxc:springdalelinux:9" ;;
         funtoo)      echo "lxc:funtoo:current" ;;
+        slackware)   echo "lxc:slackware:current" ;;
+        mageia)      echo "lxc:mageia:9" ;;
+        nixos)       echo "lxc:nixos:unstable" ;;
+        manjaro)     echo "lxc:manjaro:current" ;;
         *)           echo "" ;;
     esac
 }
+# Map our standardized arch to the LXC image server's directory name.
+_lxc_arch() {
+    case "$(get_system_arch)" in
+        aarch64)     echo "arm64" ;;
+        x86_64)      echo "amd64" ;;
+        armv7hl|armv7l) echo "armhf" ;;
+        armv6l)      echo "armel" ;;
+        i686|i586|i486|i386) echo "i386" ;;
+        ppc64le)     echo "ppc64el" ;;
+        s390x)       echo "s390x" ;;
+        riscv64)     echo "riscv64" ;;
+        loongarch64) echo "loongarch64" ;;
+        *)           echo "arm64" ;;   # sensible default for iSH-AOK
+    esac
+}
 _lxc_url() {
-    # Read the actual build index, newest builds first.
-    _lxhtml="$(fetch_text "${LXC}/${1}/${2}/arm64/default/" 2>/dev/null || true)"
+    _lxa="$(_lxc_arch)"
+    # Read the actual build index for THIS architecture, newest builds first.
+    _lxhtml="$(fetch_text "${LXC}/${1}/${2}/${_lxa}/default/" 2>/dev/null || true)"
+    # Fall back to arm64 if this arch/variant isn't published for the distro.
+    if [ -z "$_lxhtml" ] && [ "$_lxa" != "arm64" ]; then
+        _lxa="arm64"; _lxhtml="$(fetch_text "${LXC}/${1}/${2}/${_lxa}/default/" 2>/dev/null || true)"
+    fi
     [ -n "$_lxhtml" ] || return 1
     _lxbuilds="$(printf '%s\n' "$_lxhtml" | grep -oE '[0-9]{8}_[0-9]{2}:[0-9]{2}/' | sort -rV | tr -d '/')"
     [ -n "$_lxbuilds" ] || return 1
-    # Check up to 2 newest builds. Read each build's file listing and return
-    # the URL of a real tarball (never squashfs — can't extract on iSH-AOK).
     _lxc=0
     for _lxb in $_lxbuilds; do
         _lxc=$((_lxc+1)); [ "$_lxc" -gt 2 ] && break
-        _lxbase="${LXC}/${1}/${2}/arm64/default/${_lxb}"
+        _lxbase="${LXC}/${1}/${2}/${_lxa}/default/${_lxb}"
         _lxfiles="$(fetch_text "${_lxbase}/" 2>/dev/null || true)"
         [ -n "$_lxfiles" ] || continue
         if printf '%s\n' "$_lxfiles" | grep -q 'rootfs\.tar\.xz'; then
@@ -441,7 +469,6 @@ _lxc_url() {
             echo "${_lxbase}/rootfs.tar.gz"; return 0
         fi
     done
-    # No extractable tarball in recent builds (squashfs-only distro).
     return 1
 }
 resolve_url() {
@@ -1062,19 +1089,32 @@ have_mount_ns() {
 # ── architecture (official Bedrock normalization) ───────────────────────
 standardize_architecture() {
     case "${1:-}" in
-        aarch64|arm64) echo "aarch64" ;;
-        armhf|armhfp|armv7h|armv7hl|armv7a) echo "armv7hl" ;;
-        arm|armel|armle|arm7|armv7|armv7l|armv7a_hardfp) echo "armv7l" ;;
+        aarch64|arm64|armv8|armv8l|armv8b) echo "aarch64" ;;
+        aarch64_be|arm64be) echo "aarch64_be" ;;
+        armhf|armhfp|armv7h|armv7hl|armv7a|armv7a_hardfp) echo "armv7hl" ;;
+        arm|armel|armle|arm7|armv7|armv7l) echo "armv7l" ;;
+        armv6|armv6l|armv6hl) echo "armv6l" ;;
+        armv5|armv5l|armv5tel|armv5tejl) echo "armv5tel" ;;
         i386) echo "i386" ;; i486) echo "i486" ;; i586) echo "i586" ;;
-        x86|i686) echo "i686" ;;
+        x86|i686|i786) echo "i686" ;;
         mips|mipsbe|mipseb) echo "mips" ;;
         mipsel|mipsle) echo "mipsel" ;;
+        mips64|mips64be|mips64eb) echo "mips64" ;;
         mips64el|mips64le) echo "mips64el" ;;
         ppc|ppc32|powerpc|powerpc32) echo "ppc" ;;
         ppc64|powerpc64) echo "ppc64" ;;
         ppc64el|ppc64le|powerpc64el|powerpc64le) echo "ppc64le" ;;
         s390x) echo "s390x" ;;
-        amd64|x86_64) echo "x86_64" ;;
+        riscv64|rv64|rv64gc) echo "riscv64" ;;
+        riscv32|rv32) echo "riscv32" ;;
+        loongarch64|loong64|la64) echo "loongarch64" ;;
+        sparc64) echo "sparc64" ;;
+        sparc) echo "sparc" ;;
+        sh4|sh4a) echo "sh4" ;;
+        alpha) echo "alpha" ;;
+        m68k) echo "m68k" ;;
+        amd64|x86_64|x64|x86-64) echo "x86_64" ;;
+        x86_64v2) echo "x86_64" ;; x86_64v3) echo "x86_64" ;;
         *) echo "" ;;
     esac
 }
@@ -1083,7 +1123,10 @@ get_system_arch() {
     [ -n "$_gsa" ] && echo "$_gsa" || echo "unknown"
 }
 brl_archs() {
-    printf '%s\n' aarch64 armv7hl armv7l mips mipsel mips64el ppc64 ppc64le s390x i386 i486 i586 i686 x86_64
+    printf '%s\n' aarch64 aarch64_be armv7hl armv7l armv6l armv5tel \
+        mips mipsel mips64 mips64el ppc ppc64 ppc64le s390x \
+        riscv64 riscv32 loongarch64 sparc64 sparc sh4 alpha m68k \
+        i386 i486 i586 i686 x86_64
 }
 
 _mount_pseudo() {
@@ -1294,6 +1337,12 @@ _pkg_cmd() {
     elif [ -x "${_upr}/usr/bin/apt-get" ]; then echo "apt-get update && apt-get -y upgrade"
     elif [ -x "${_upr}/bin/opkg" ] || [ -x "${_upr}/usr/bin/opkg" ]; then echo "opkg update && opkg upgrade"
     elif [ -x "${_upr}/usr/bin/emerge" ]; then echo "emerge --sync && emerge -uDN @world"
+    elif [ -x "${_upr}/usr/sbin/slackpkg" ] || [ -x "${_upr}/usr/bin/slackpkg" ]; then echo "slackpkg update && slackpkg upgrade-all"
+    elif [ -x "${_upr}/usr/sbin/urpmi" ] || [ -x "${_upr}/usr/bin/urpmi" ]; then echo "urpmi.update -a && urpmi --auto-update"
+    elif [ -x "${_upr}/usr/bin/nix-env" ]; then echo "nix-channel --update && nix-env -u"
+    elif [ -x "${_upr}/usr/bin/eopkg" ]; then echo "eopkg -y upgrade"
+    elif [ -x "${_upr}/usr/bin/swupd" ]; then echo "swupd update"
+    elif [ -x "${_upr}/usr/bin/guix" ]; then echo "guix pull && guix upgrade"
     else echo ""; fi
 }
 # Best package-manager install command for a stratum (used by brl install helper).
@@ -1309,6 +1358,12 @@ _pkg_install_cmd() {
     elif [ -x "${_ipr}/usr/bin/apt-get" ]; then echo "apt-get install -y"
     elif [ -x "${_ipr}/bin/opkg" ] || [ -x "${_ipr}/usr/bin/opkg" ]; then echo "opkg install"
     elif [ -x "${_ipr}/usr/bin/emerge" ]; then echo "emerge"
+    elif [ -x "${_ipr}/usr/sbin/slackpkg" ] || [ -x "${_ipr}/usr/bin/slackpkg" ]; then echo "slackpkg install"
+    elif [ -x "${_ipr}/usr/sbin/urpmi" ] || [ -x "${_ipr}/usr/bin/urpmi" ]; then echo "urpmi --auto"
+    elif [ -x "${_ipr}/usr/bin/nix-env" ]; then echo "nix-env -iA"
+    elif [ -x "${_ipr}/usr/bin/eopkg" ]; then echo "eopkg -y install"
+    elif [ -x "${_ipr}/usr/bin/swupd" ]; then echo "swupd bundle-add"
+    elif [ -x "${_ipr}/usr/bin/guix" ]; then echo "guix install"
     else echo ""; fi
 }
 # brl install <stratum> <pkg...> — install packages into a stratum from the host.
@@ -1513,6 +1568,25 @@ OSR
 for _d in /bedrock/bin /bedrock/cross/bin; do [ -d "$_d" ] || continue; case ":${PATH}:" in *:"$_d":*) ;; *) PATH="${_d}:${PATH}" ;; esac; done
 export PATH; [ -z "${BEDROCK_STRATUM:-}" ] && export BEDROCK_STRATUM="$(cat /bedrock/run/init_stratum 2>/dev/null || echo bedrock)"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+# Pretty gray Bedrock prompt (only for interactive shells that support color).
+# Identity is always "bedrock" — this is Bedrock, not the login user.
+if [ -n "${PS1:-}" ]; then
+    case "${TERM:-}" in
+        ""|dumb) ;;
+        *)
+            _brl_gray='\[\033[38;5;245m\]'; _brl_dim='\[\033[38;5;240m\]'
+            _brl_lt='\[\033[38;5;250m\]'; _brl_rst='\[\033[0m\]'
+            if [ -n "${BASH_VERSION:-}" ]; then
+                PS1="${_brl_dim}┌ ${_brl_lt}bedrock${_brl_dim}:${_brl_gray}\w${_brl_rst}\n${_brl_dim}└─${_brl_gray}\$${_brl_rst} "
+            else
+                # POSIX/ash fallback (plain gray, single line)
+                PS1="$(printf '\033[38;5;250m')bedrock$(printf '\033[38;5;240m'):$(printf '\033[38;5;245m')\$PWD$(printf '\033[38;5;240m')\$$(printf '\033[0m') "
+            fi
+            export PS1
+            unset _brl_gray _brl_dim _brl_lt _brl_rst
+            ;;
+    esac
+fi
 PD
     chmod +x /etc/profile.d/bedrock.sh
     for _hr in /etc/bash.bashrc "${HOME}/.bashrc" "${HOME}/.profile"; do
@@ -1526,6 +1600,7 @@ PD
     notice "This system is now ${color_strat}Bedrock Linux${color_norm}"
     # Additive integration layer: capabilities, boot units, AOK roots, rollback.
     braok_detect_caps 2>/dev/null || true
+    braok_repair_system 2>/dev/null || true
     braok_install_units 2>/dev/null || true
     braok_register_aok 2>/dev/null || true
     braok_rollback_create "post-hijack" >/dev/null 2>&1 || true
@@ -1837,7 +1912,7 @@ brl_subcommands() {
     for _sc in list status show fetch fetch-url apply install update copy \
                enable disable remove rename alias unalias which reload umount \
                fix deps hijack unhijack report update-urls tutorial \
-               capabilities security pin export import-tar config self-update integrate boot-init init-install init-uninstall init-status rollback verify health \
+               capabilities security harden repair-system pin export import-tar config self-update integrate boot-init init-install init-uninstall init-status rollback verify health \
                test register-aok archs subcommands version help; do
         echo "$_sc"
     done
@@ -1974,6 +2049,68 @@ braok_probe() {
         *) echo unavailable ;;
     esac
 }
+
+# ── hijack-time system repair ───────────────────────────────────────────
+# Scans for common, real problems and fixes the safe ones. Every fix is
+# idempotent and conservative — nothing destructive. Reports what it did.
+braok_repair_system() {
+    _rf=0; _rp=0
+    say ""; say "${B}Scanning system for fixable issues...${Z}"
+    # 1) Essential directories.
+    for _d in /tmp /var/tmp /run /var/run /var/log /etc /dev/shm; do
+        if [ ! -d "$_d" ]; then _rp=$((_rp+1)); mkdir -p "$_d" 2>/dev/null && { notice "created missing ${_d}"; _rf=$((_rf+1)); }; fi
+    done
+    if [ -d /tmp ]; then
+        _perm="$(stat -c '%a' /tmp 2>/dev/null || echo '')"
+        case "$_perm" in 1777) ;; *) _rp=$((_rp+1)); chmod 1777 /tmp 2>/dev/null && { notice "fixed /tmp permissions (was ${_perm:-?})"; _rf=$((_rf+1)); } ;; esac
+    fi
+    # 2) Dangling symlinks in critical bin/lib paths.
+    for _cd in /bin /sbin /usr/bin /usr/sbin /lib /usr/lib; do
+        [ -d "$_cd" ] || continue
+        for _l in "$_cd"/*; do
+            [ -L "$_l" ] || continue
+            if [ ! -e "$_l" ]; then _rp=$((_rp+1)); rm -f "$_l" 2>/dev/null && { notice "removed dangling link ${_l##*/}"; _rf=$((_rf+1)); }; fi
+        done 2>/dev/null
+    done
+    # 3) DNS.
+    if [ ! -s /etc/resolv.conf ]; then
+        _rp=$((_rp+1)); printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf 2>/dev/null && { notice "wrote working /etc/resolv.conf"; _rf=$((_rf+1)); }
+    fi
+    # 4) /etc/hosts localhost.
+    if [ ! -s /etc/hosts ] || ! grep -q '127.0.0.1' /etc/hosts 2>/dev/null; then
+        _rp=$((_rp+1)); printf '127.0.0.1\tlocalhost\n::1\tlocalhost\n' >> /etc/hosts 2>/dev/null && { notice "repaired /etc/hosts"; _rf=$((_rf+1)); }
+    fi
+    # 5) Stale package-manager locks (only if unheld).
+    for _lk in /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+               /var/cache/apt/archives/lock /var/lib/pacman/db.lck /run/xbps.lock; do
+        if [ -e "$_lk" ] && ! fuser "$_lk" >/dev/null 2>&1; then
+            _rp=$((_rp+1)); rm -f "$_lk" 2>/dev/null && { notice "cleared stale lock ${_lk##*/}"; _rf=$((_rf+1)); }
+        fi
+    done
+    # 6) Critical file permissions.
+    for _pf in "/etc/passwd:644" "/etc/group:644" "/etc/shadow:640" "/etc/sudoers:440"; do
+        _f="${_pf%:*}"; _want="${_pf##*:}"; [ -e "$_f" ] || continue
+        _cur="$(stat -c '%a' "$_f" 2>/dev/null || echo '')"
+        [ -n "$_cur" ] && [ "$_cur" != "$_want" ] && { _rp=$((_rp+1)); chmod "$_want" "$_f" 2>/dev/null && { notice "fixed perms ${_f} (${_cur}→${_want})"; _rf=$((_rf+1)); }; }
+    done
+    # 7) /etc/mtab.
+    if [ ! -e /etc/mtab ] && [ -e /proc/mounts ]; then
+        _rp=$((_rp+1)); ln -sf /proc/mounts /etc/mtab 2>/dev/null && { notice "linked /etc/mtab → /proc/mounts"; _rf=$((_rf+1)); }
+    fi
+    # 8) machine-id.
+    if [ ! -s /etc/machine-id ]; then
+        _rp=$((_rp+1))
+        { has systemd-machine-id-setup && systemd-machine-id-setup >/dev/null 2>&1; } || \
+          { cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' > /etc/machine-id 2>/dev/null; }
+        [ -s /etc/machine-id ] && { notice "generated /etc/machine-id"; _rf=$((_rf+1)); }
+    fi
+    if [ "$_rf" -gt 0 ]; then ok "repaired ${_rf} issue(s)"
+    elif [ "$_rp" -gt 0 ]; then warn "${_rp} issue(s) seen, none safely auto-fixable"
+    else ok "no issues found — system healthy"; fi
+    braok_log info "repair: ${_rf} fixed / ${_rp} seen" 2>/dev/null || true
+    return 0
+}
+
 braok_detect_caps() {
     mkdir -p "$BETC" 2>/dev/null || true
     _tmp="${BRAOK_CAPS}.new"
@@ -2021,6 +2158,39 @@ brl_security() {
     say "  • Strata package managers relax gpg by default because fresh iSH-AOK roots"
     say "    often lack seeded keyrings; ${color_cmd}BRL_STRICT=1${color_norm} keeps them strict where the"
     say "    keyring is present."
+}
+# brl harden — apply safe, idempotent security hardening to the Bedrock install.
+brl_harden() {
+    need_root
+    print_logo "Bedrock-AOK hardening"
+    _hc=0
+    # 1) Tighten permissions on Bedrock's own config/state.
+    for _hf in "$BETC" "$BRUN" "${BR}/var"; do
+        [ -d "$_hf" ] && chmod -R go-w "$_hf" 2>/dev/null && _hc=$((_hc+1))
+    done
+    ok "removed group/other write on Bedrock config & state"
+    # 2) Protect the tool binaries from non-root modification.
+    for _hb in "${BR}/bin/brl" "${BR}/bin/strat"; do
+        [ -e "$_hb" ] && chmod 0755 "$_hb" 2>/dev/null
+    done
+    ok "tool binaries set to 0755 (root-owned, non-writable by others)"
+    # 3) Persist a safe umask for Bedrock shells.
+    if [ -f /etc/profile.d/bedrock.sh ] && ! grep -q 'umask 022' /etc/profile.d/bedrock.sh 2>/dev/null; then
+        printf '\numask 022\n' >> /etc/profile.d/bedrock.sh && ok "umask 022 persisted for Bedrock shells"
+    fi
+    # 4) Enable strict integrity mode as the default going forward.
+    brl_config set "cross.strict_integrity" "true" >/dev/null 2>&1 && ok "strict integrity recorded in bedrock.conf"
+    # 5) Ensure the pinned list & capabilities file aren't world-writable.
+    for _hp in "${BETC}/pinned" "$BRAOK_CAPS" "${BETC}/bedrock.conf"; do
+        [ -f "$_hp" ] && chmod 0644 "$_hp" 2>/dev/null
+    done
+    # 6) Report the resulting posture.
+    say ""
+    ok "hardening applied"
+    say "  For maximum security on future fetches, use:"
+    say "    ${color_cmd}BRL_STRICT=1 brl fetch <stratum>${color_norm}   (keep distro gpg checks on)"
+    say "  and never set BRL_INSECURE unless a mirror genuinely lacks TLS."
+    braok_log info "hardening applied" 2>/dev/null || true
 }
 brl_capabilities() {
     [ -f "$BRAOK_CAPS" ] || braok_detect_caps
@@ -2412,6 +2582,12 @@ brl_test() {
     _t "os-release is real file" "[ -f /etc/os-release ] && [ ! -L /etc/os-release ] || [ -e /etc/os-release ]"
     _t "capabilities detected"   "[ -f '$BRAOK_CAPS' ] || braok_detect_caps"
     _t "arch is supported"       "brl_archs | grep -qx \"\$(get_system_arch)\""
+    _t "riscv64 normalizes"      "[ \"\$(standardize_architecture riscv64)\" = riscv64 ]"
+    _t "loongarch64 normalizes"  "[ \"\$(standardize_architecture loong64)\" = loongarch64 ]"
+    _t "lxc arch maps"           "[ -n \"\$(_lxc_arch)\" ]"
+    _t "catalog has 29 distros"  "[ \"\$(catalog_names | tr ' ' '\\n' | grep -c .)\" -ge 29 ]"
+    _t "harden function present" "command -v brl_harden >/dev/null 2>&1"
+    _t "repair function present" "command -v braok_repair_system >/dev/null 2>&1"
     say "${B}Security${Z}"
     _t "sha256 tool present"     "has sha256sum || has shasum || has openssl"
     _t "verify_sha256 detects match" "_tf1=\$(mktemp); echo bedrock>\$_tf1; _th=\$(_sha256 \$_tf1); verify_sha256 \$_tf1 \$_th"
@@ -2570,6 +2746,7 @@ case "$_cmd" in
     archs)         brl_archs ;;
     capabilities|caps) brl_capabilities "$@" ;;
     security)      brl_security "$@" ;;
+    harden)        brl_harden "$@" ;;
     pin)           brl_pin "$@" ;;
     export)        brl_export "$@" ;;
     import-tar)    brl_import_tar "$@" ;;
@@ -2585,6 +2762,7 @@ case "$_cmd" in
     health)        brl_health "$@" ;;
     test|selftest) brl_test "$@" ;;
     register-aok)  brl_register_aok "$@" ;;
+    repair-system|fixsys) braok_repair_system ;;
     --hijack|--update|--force-update|--restat) run_installer "$_cmd" "$@" ;;
     version|--version|-v) brl_version ;;
     help|--help|-h) if [ "$#" -ge 1 ]; then brl_help_cmd "$1"; else brl_help; fi ;;

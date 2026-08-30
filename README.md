@@ -11,7 +11,7 @@
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![POSIX Shell](https://img.shields.io/badge/Language-POSIX_Shell-4EAA25.svg)](#)
 [![Platform: iOS | iPadOS](https://img.shields.io/badge/Platform-iOS_|_iPadOS-000000.svg?logo=apple&logoColor=white)](https://github.com/emkey1/AOK-Filesystem-Tools)
-[![Version: 1.2.0](https://img.shields.io/badge/Version-1.2.0-E95420.svg)](#)
+[![Version: 1.2.0](https://img.shields.io/badge/Version-1.3.0-E95420.svg)](#)
 [![Strata: 29 distros](https://img.shields.io/badge/Strata-29_Distributions-2ea44f.svg)](#supported-distributions)
 [![Status: In Development](https://img.shields.io/badge/Status-In_Development-FFDD57.svg?labelColor=555)](#development-status)
 [![Arch: aarch64](https://img.shields.io/badge/Arch-aarch64-lightgrey.svg)](#)
