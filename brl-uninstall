@@ -15,7 +15,7 @@
 # ============================================================================
 set -u
 
-BRL_UNINSTALL_VERSION="1.3.0"
+BRL_UNINSTALL_VERSION="1.4.0"
 BR="/bedrock"
 STRATA="${BR}/strata"
 BETC="${BR}/etc"
@@ -215,6 +215,16 @@ fi
 
 # ── 7. remove /bedrock ──────────────────────────────────────────────────
 say ""
+# First, tear down any FUSE/scratch mounts brl created (build 551+).
+if [ -f "${BR}/run/fuse-mounts" ]; then
+    info "unmounting brl-managed FUSE mounts..."
+    while IFS="$(printf '\t')" read -r _ft _fm _fs; do
+        [ -n "$_fm" ] || continue
+        if command -v fusermount3 >/dev/null 2>&1; then fusermount3 -u "$_fm" 2>/dev/null && continue; fi
+        if command -v fusermount  >/dev/null 2>&1; then fusermount  -u "$_fm" 2>/dev/null && continue; fi
+        umount "$_fm" 2>/dev/null || umount -l "$_fm" 2>/dev/null || true
+    done < "${BR}/run/fuse-mounts" 2>/dev/null
+fi
 info "removing Bedrock files..."
 if [ "$_remove_strata" = "1" ]; then
     # Safety: refuse if anything is still mounted underneath.

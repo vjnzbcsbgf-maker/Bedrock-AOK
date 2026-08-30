@@ -11,7 +11,7 @@
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![POSIX Shell](https://img.shields.io/badge/Language-POSIX_Shell-4EAA25.svg)](#)
 [![Platform: iOS | iPadOS](https://img.shields.io/badge/Platform-iOS_|_iPadOS-000000.svg?logo=apple&logoColor=white)](https://github.com/emkey1/AOK-Filesystem-Tools)
-[![Version: 1.2.0](https://img.shields.io/badge/Version-1.3.0-E95420.svg)](#)
+[![Version: 1.4.0](https://img.shields.io/badge/Version-1.4.0-E95420.svg)](#)
 [![Strata: 29 distros](https://img.shields.io/badge/Strata-29_Distributions-2ea44f.svg)](#supported-distributions)
 [![Status: In Development](https://img.shields.io/badge/Status-In_Development-FFDD57.svg?labelColor=555)](#development-status)
 [![Arch: aarch64](https://img.shields.io/badge/Arch-aarch64-lightgrey.svg)](#)
@@ -22,7 +22,7 @@
 >
 > **[Website](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/)** · **[Forum](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/#forum)** · **[Releases](https://vjnzbcsbgf-maker.github.io/Bedrock-AOK/#releases)** · **[GitHub](https://github.com/vjnzbcsbgf-maker/Bedrock-AOK)**
 
-Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using only `chroot` and bind mounts — no FUSE, no kernel namespaces, no extended attributes — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
+Bedrock-AOK is a faithful port of [Bedrock Linux](https://bedrocklinux.org) for [iSH-AOK](https://github.com/emkey1/AOK-Filesystem-Tools) (aarch64), the enhanced fork of the original [iSH](https://github.com/ish-app/ish) Linux emulator for iOS. It reimplements Bedrock's multi-distro stratum system using `chroot`, bind mounts, and (on build 551+) native FUSE — so it runs cleanly inside iSH-AOK's emulated Linux environment on iPhone and iPad.
 
 Each distribution lives in its own **stratum**: an isolated root filesystem that shares the host's kernel, network, and device tree. Commands installed in any stratum are automatically wired into a unified `PATH` so you can mix packages freely across distros.
 
@@ -73,17 +73,19 @@ Each distribution lives in its own **stratum**: an isolated root filesystem that
 ### Editions & Lifecycle
 
 - **Two editions** — reversible (`brl`) and permanent (`bedrockport.sh`) — both with the full feature set
-- **v1.2.0 features** — parallel apply, stratum pin/export/import, config get/set, GPG rootfs verification, JSON output, self-update, per-command help
-- **Clean uninstaller** — `brl-uninstall` fully restores the host when removing a permanent install
+- **v1.4.0 features** — FUSE support (build 551+), archive/sshfs/overlay mounts, scratch filesystems, security hardening, repair-system, plus all v1.2.0 features (parallel apply, stratum pin/export/import, config get/set, GPG rootfs verification, JSON output, self-update)
+- **Clean uninstaller** — `brl-uninstall` fully restores the host when removing a permanent install (now handles FUSE mount cleanup)
 
 ### Integration Layer (all editions)
 
-- **Runtime capability detection** — probes what the iSH-AOK kernel actually supports (namespaces, cgroups, filesystems) and adapts
+- **Runtime capability detection** — probes what the iSH-AOK kernel actually supports (namespaces, cgroups, FUSE, filesystems) and adapts
+- **FUSE support** *(build 551+)* — native FUSE (protocol 7.31, libfuse2+3) with archive mounts, SSHFS, overlayfs, and in-memory scratch filesystems
+- **Security hardening** — `brl security` reports TLS/checksum/GPG posture; `brl harden` applies safe, idempotent hardening
 - **Self-test suite** — `brl test` runs a full regression suite covering environment, structure, namespaces, and strat round-trips
 - **Health checks with auto-repair** — `brl health` verifies each stratum can exec and auto-repairs broken ones
 - **Integrity verification** — `brl verify` checks the Bedrock directory structure with optional `--repair`
 - **Rollback points** — snapshot and restore Bedrock configuration to undo bad changes
-- **systemd boot integration** — optional init service and target so `/bedrock` comes up at boot without touching PID 1 (integrated/all/unified editions)
+- **systemd boot integration** — optional init service and target so `/bedrock` comes up at boot without touching PID 1
 - **AOK roots registration** — auto-discovers `/AOK/roots` and registers them as Bedrock strata
 - **Structured logging** — journald when available, file fallback at `/bedrock/var/log/bedrock.log`
 
@@ -211,9 +213,25 @@ brl tutorial             # Quick-start tutorial
 brl version              # Show version
 ```
 
-### Advanced Commands
+### FUSE & Data Mounts (build 551+)
 
-Available in all editions (some features require integrated/all/unified editions):
+```sh
+brl mount-archive <stratum> <archive> <mountpoint>   # Mount an archive (tar/zip/squashfs) into a stratum
+brl mount-sshfs <stratum> <user@host:/path> <mp>     # Mount a remote filesystem via SSHFS
+brl mount-overlay <stratum> <lower> <upper> <mp>     # Create an overlay mount
+brl scratch <stratum> <mountpoint>                   # In-memory tmpfs scratch filesystem
+brl fuse-mounts                                      # List all brl-managed FUSE/scratch mounts
+brl unmount <mountpoint>                             # Cleanly unmount a brl-managed mount
+```
+
+### Security
+
+```sh
+brl security                    # Report TLS/checksum/GPG posture
+brl harden                      # Apply safe, idempotent security hardening
+```
+
+### Advanced Commands
 
 ```sh
 brl capabilities [--json]       # Show detected iSH-AOK kernel capabilities
@@ -225,6 +243,7 @@ brl rollback create [label]     # Create a named rollback point
 brl rollback restore <id>       # Restore a previous rollback point
 brl integrate                   # Full integration setup (caps + verify + units + AOK roots)
 brl register-aok                # Discover and register /AOK/roots as strata
+brl repair-system               # Repair system-level Bedrock integration
 ```
 
 ---
@@ -270,8 +289,8 @@ brl register-aok                # Discover and register /AOK/roots as strata
 | Aspect | Upstream Bedrock Linux | Bedrock-AOK |
 |:---|:---|:---|
 | **Language** | C + custom kernel module | Pure POSIX shell |
-| **Isolation** | Kernel namespaces, FUSE, xattrs | `chroot` + bind mounts |
-| **Cross-filesystem** | FUSE-based `crossfs` | Shell shim scripts in `/bedrock/cross/bin/` |
+| **Isolation** | Kernel namespaces, FUSE, xattrs | `chroot` + bind mounts + FUSE (build 551+) |
+| **Cross-filesystem** | FUSE-based `crossfs` | Shell shim scripts in `/bedrock/cross/bin/` (crossfs emulated) |
 | **Target platform** | Bare-metal / VM x86_64 | iSH-AOK aarch64 on iOS |
 | **Init integration** | Hijacks PID 1 | Optional systemd service (PID 1 untouched) |
 | **Package sources** | Mirror-based with GPG verification | LXC image server + direct mirrors |
@@ -330,7 +349,9 @@ This project is under active development. The capability detection system adapts
 | Per-distro package manager fixes | ![Stable](https://img.shields.io/badge/-Stable-2ea44f) | 9 package managers |
 | Rollback / integrity verification | ![Stable](https://img.shields.io/badge/-Stable-2ea44f) | Integrated edition |
 | Self-test suite | ![Stable](https://img.shields.io/badge/-Stable-2ea44f) | 20+ regression tests |
+| FUSE support (archive, sshfs, overlay, scratch) | ![Working](https://img.shields.io/badge/-Working-blue) | Build 551+ (protocol 7.31) |
 | Mount namespace isolation | ![Working](https://img.shields.io/badge/-Working-blue) | Depends on iSH-AOK build |
+| Security hardening (`brl security` / `brl harden`) | ![Stable](https://img.shields.io/badge/-Stable-2ea44f) | All editions |
 | PID / UTS / IPC / Net namespace isolation | ![In Progress](https://img.shields.io/badge/-In_Progress-FFDD57) | Depends on iSH-AOK kernel |
 | User namespace support | ![In Progress](https://img.shields.io/badge/-In_Progress-FFDD57) | Depends on iSH-AOK kernel |
 | cgroup v2 integration | ![In Progress](https://img.shields.io/badge/-In_Progress-FFDD57) | Depends on iSH-AOK kernel |

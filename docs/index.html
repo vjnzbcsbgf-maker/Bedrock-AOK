@@ -62,7 +62,7 @@
     <p class="hero-tagline">Run <strong>29 Linux distributions</strong> simultaneously on iOS through iSH-AOK. Mix and match packages across distros with chroot-based strata.</p>
 
     <div class="hero-meta">
-      <span>v<span class="val">1.3.0</span></span>
+      <span>v<span class="val">1.4.0</span></span>
       <span class="dot">&middot;</span>
       <span>GPLv2</span>
       <span class="dot">&middot;</span>
@@ -92,20 +92,20 @@
         <p>Reversible (<code>brl</code>) and permanent (<code>bedrockport.sh</code>) &mdash; both with the full feature set. Clean uninstaller included.</p>
       </div>
       <div class="feat">
-        <h3>Capability Detection</h3>
-        <p>Probes iSH-AOK runtime capabilities &mdash; namespaces, cgroups, bind mounts &mdash; and adapts automatically.</p>
+        <h3>Native FUSE (Build 551+)</h3>
+        <p>Archive mounts, SSHFS, overlay filesystems, and in-memory scratch &mdash; all managed by <code>brl</code> with automatic cleanup.</p>
       </div>
       <div class="feat">
-        <h3>Safe Rollback</h3>
-        <p>Create snapshots before changes. Roll back if something goes wrong. Health checks verify stratum integrity.</p>
+        <h3>Capability Detection</h3>
+        <p>Probes iSH-AOK runtime capabilities &mdash; namespaces, cgroups, FUSE, bind mounts &mdash; and adapts automatically.</p>
       </div>
       <div class="feat">
         <h3>Cross-Distro Packages</h3>
         <p>Use apt from Debian, pacman from Arch, dnf from Fedora in the same session. Mix packages freely.</p>
       </div>
       <div class="feat">
-        <h3>Integration Layer</h3>
-        <p>systemd boot units, AOK roots registration, structured logging, and a full self-test suite.</p>
+        <h3>Security &amp; Hardening</h3>
+        <p><code>brl security</code> audits your posture. <code>brl harden</code> applies safe, idempotent hardening. Rollback, health checks, and self-test built in.</p>
       </div>
     </div>
   </section>
@@ -119,7 +119,7 @@
         <div class="ed-file">brl</div>
         <ul class="ed-feat-list">
           <li>Full stratum management</li>
-          <li>Cross-distro commands</li>
+          <li>FUSE, security, cross-distro</li>
           <li>Integration layer</li>
           <li>Reversible with <code>brl unhijack</code></li>
           <li class="no">Does not persist across reboots</li>
@@ -130,7 +130,7 @@
         <div class="ed-file">bedrockport.sh</div>
         <ul class="ed-feat-list">
           <li>Full stratum management</li>
-          <li>Cross-distro commands</li>
+          <li>FUSE, security, cross-distro</li>
           <li>Integration layer</li>
           <li>Survives reboots</li>
           <li>--hijack / --update / --restat</li>
@@ -321,13 +321,13 @@ function loadReleases() {
       if (!releases || !releases.length || releases.message) {
         container.innerHTML =
           '<div class="rel-card">' +
-          '<div class="rel-head"><div><span class="rel-ver">v1.3.0</span> <span class="rel-latest">Latest</span></div>' +
+          '<div class="rel-head"><div><span class="rel-ver">v1.4.0</span> <span class="rel-latest">Latest</span></div>' +
           '<span class="rel-date">August 2026</span></div>' +
-          '<div class="rel-name">v1.3.0 &mdash; Streamlined Release</div>' +
-          '<div class="rel-body"><p>Major release of Bedrock-AOK for iSH-AOK (aarch64/iOS).</p>' +
-          '<ul><li>Two editions: reversible &amp; permanent, both with full features</li><li>29 Linux distributions</li>' +
-          '<li>Parallel apply, stratum pin/export/import, config get/set</li><li>GPG rootfs verification, JSON output, self-update</li>' +
-          '<li>Dedicated uninstaller</li></ul></div>' +
+          '<div class="rel-name">v1.4.0 &mdash; FUSE &amp; Build 551 Release</div>' +
+          '<div class="rel-body"><p>Major release adding native FUSE support for iSH-AOK build 551+.</p>' +
+          '<ul><li>Native FUSE (protocol 7.31): archive, SSHFS, overlay, and scratch mounts</li><li>Security hardening: <code>brl security</code> &amp; <code>brl harden</code></li>' +
+          '<li>Build 551 enhancements: recursive bind mounts, file-over-file binds, CAP_SYS_CHROOT gating</li>' +
+          '<li>FUSE mount tracking &amp; cleanup in uninstaller</li></ul></div>' +
           '<div class="rel-assets"><div class="rel-assets-head">Assets</div>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/bedrockport.sh" class="rel-dl" target="_blank">bedrockport.sh</a>' +
           '<a href="https://github.com/vjnzbcsbgf-maker/Bedrock-AOK/raw/main/brl" class="rel-dl" target="_blank">brl</a>' +

@@ -1,6 +1,6 @@
 #!/bin/sh
 # ============================================================================
-#  Bedrock Linux — iSH-AOK port  (brl / strat)   bedrock-port  v1.3.0 [PERMANENT]
+#  Bedrock Linux — iSH-AOK port  (brl / strat)   bedrock-port  v1.4.0 [PERMANENT]
 #  Faithful reimplementation of Bedrock Linux for iSH-AOK (iOS ARM64/aarch64).
 #
 #  Mixes packages from many distributions as "strata". Uses chroot + bind
@@ -22,7 +22,7 @@
 set -u
 umask 022                       # safe default perms for anything we create
 
-BRL_PORT_VERSION="1.3.0"
+BRL_PORT_VERSION="1.4.0"
 BR="/bedrock"
 STRATA="${BR}/strata"
 CROSSBIN="${BR}/cross/bin"
@@ -1245,6 +1245,18 @@ cmd_strat() {
     if [ "$_sn" = "$(init_stratum)" ]; then [ "$#" -ge 1 ] || set -- "${SHELL:-/bin/sh}"; exec "$@"; fi
     has chroot || die "chroot unavailable."
     [ -d "$_sroot" ] || die "stratum root not found: $_sroot"
+    # Build 551: chroot/mount require CAP_SYS_CHROOT/CAP_SYS_ADMIN. As root we
+    # have them. As a default-user (uid!=0) session they return EPERM. Decide how
+    # to get privilege: (a) already root → direct; (b) user+mount ns maps us to
+    # root inside the ns (unshare -mUr) granting the caps there; (c) sudo. We pick
+    # the first that actually works so 'strat' keeps functioning either way.
+    _priv_mode="root"
+    if [ "$(id -u 2>/dev/null)" != 0 ]; then
+        if unshare -mUr /bin/true 2>/dev/null; then _priv_mode="userns"
+        elif has sudo && sudo -n true 2>/dev/null; then _priv_mode="sudo"
+        elif has sudo; then _priv_mode="sudo-ask"
+        else _priv_mode="unpriv"; fi
+    fi
     _force_dns "$_sroot"
     _ssh="$(_stratum_shell "$_sroot")"
     if [ "$_sr" = "1" ]; then _sp="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1271,8 +1283,19 @@ cmd_strat() {
         # Private mount namespace: bind mounts are isolated to this invocation
         # and vanish automatically on exit — no global pollution, no umount
         # needed. This is how real Bedrock isolates stratum process trees.
+        # Build 551: if we're not root, add -U -r so we're root INSIDE the ns and
+        # hold CAP_SYS_ADMIN + CAP_SYS_CHROOT there (mount & chroot both work).
+        case "$_priv_mode" in
+            userns)  set -- unshare -m -U -r --propagation private /bin/sh -c ;;
+            sudo|sudo-ask) set -- sudo unshare -m --propagation private /bin/sh -c ;;
+            unpriv)
+                warn "chroot/mount need privilege on this build (uid $(id -u))."
+                warn "Run brl as root, install sudo, or disable 'Open Everything as Default User'."
+                die "cannot enter stratum without privilege" ;;
+            *)       set -- unshare -m --propagation private /bin/sh -c ;;
+        esac
         BRL_SROOT="$_sroot" BRL_SSH="$_ssh" BRL_INNER="$_inner" \
-        unshare -m --propagation private /bin/sh -c '
+        "$@" '
             _r="$BRL_SROOT"
             mkdir -p "$_r/proc" "$_r/sys" "$_r/dev" "$_r/dev/pts" "$_r/dev/shm" "$_r/run" "$_r/tmp" 2>/dev/null || true
             mount -t proc proc "$_r/proc" 2>/dev/null || mount --bind /proc "$_r/proc" 2>/dev/null || true
@@ -1287,9 +1310,18 @@ cmd_strat() {
         _src=$?
     else
         # Fallback: global bind mounts (persist for speed; cleared by brl umount).
-        _mount_pseudo "$_sroot"
-        chroot "$_sroot" "$_ssh" -c "$_inner"
-        _src=$?
+        # Build 551: elevate via sudo if we're unprivileged and it's available.
+        case "$_priv_mode" in
+            sudo|sudo-ask)
+                _mount_pseudo "$_sroot"
+                sudo chroot "$_sroot" "$_ssh" -c "$_inner"; _src=$? ;;
+            unpriv)
+                warn "chroot needs privilege on this build (uid $(id -u)) and no mount-ns/sudo is available."
+                die "cannot enter stratum without privilege" ;;
+            *)
+                _mount_pseudo "$_sroot"
+                chroot "$_sroot" "$_ssh" -c "$_inner"; _src=$? ;;
+        esac
     fi
 
     if [ "$_interactive" = "1" ]; then
@@ -1509,6 +1541,7 @@ brl_rename() {
 }
 cmd_umount() {
     need_root; _umn="${1:-}"
+    _fuse_cleanup_all 2>/dev/null || true
     if [ -n "$_umn" ]; then _unmount_pseudo "${STRATA}/${_umn}"; ok "unmounted $_umn"; return 0; fi
     for _umd in "${STRATA}"/*; do [ -d "$_umd" ] && _unmount_pseudo "$_umd"; done; ok "unmounted all"
 }
@@ -1954,7 +1987,7 @@ brl_subcommands() {
     for _sc in list status show fetch fetch-url apply install update copy \
                enable disable remove rename alias unalias which reload umount \
                fix deps hijack unhijack report update-urls tutorial \
-               capabilities security harden repair-system pin export import-tar config self-update integrate boot-init init-install init-uninstall init-status rollback verify health \
+               capabilities security harden fuse mount-archive mount-sshfs mount-overlay scratch fuse-mounts unmount repair-system pin export import-tar config self-update integrate boot-init init-install init-uninstall init-status rollback verify health \
                test register-aok archs subcommands version help; do
         echo "$_sc"
     done
@@ -2017,21 +2050,22 @@ braok_probe() {
     # them is blocked, so we actually attempt the unshare.
     case "$1" in
         chroot)
-            # prove chroot(2) works, not just that the binary exists
-            has chroot && chroot / /bin/true 2>/dev/null && echo native || echo unavailable ;;
+            # Build 551: chroot(2) gates on CAP_SYS_CHROOT. It works as root but
+            # returns EPERM for an unprivileged (default-user) session. Report the
+            # third honest state "needs-privilege" so strat can elevate.
+            if ! has chroot; then echo unavailable
+            elif chroot / /bin/true 2>/dev/null; then echo native
+            elif [ "$(id -u 2>/dev/null)" != 0 ]; then echo needs-privilege
+            else echo unavailable; fi ;;
         unshare)
-            # prove unshare actually executes (not just that the binary exists)
             has unshare && unshare /bin/true 2>/dev/null && echo native || echo unavailable ;;
         nsenter)
-            # nsenter needs a target ns to truly exercise; prove it runs + self-enter
             has nsenter && nsenter --help >/dev/null 2>&1 && echo native || echo unavailable ;;
         mount_ns)
-            # real test: create a private mount namespace and run a process in it
             has unshare && unshare -m /bin/true 2>/dev/null && echo native || echo unavailable ;;
         user_ns)
             has unshare && unshare -U /bin/true 2>/dev/null && echo native || echo unavailable ;;
         pid_ns)
-            # needs fork inside the new PID ns; unshare -pf does that
             has unshare && unshare -pf /bin/true 2>/dev/null && echo native || echo unavailable ;;
         net_ns)
             has unshare && unshare -n /bin/true 2>/dev/null && echo native || echo unavailable ;;
@@ -2067,11 +2101,27 @@ braok_probe() {
         devtmpfs)
             mount 2>/dev/null | grep -q 'devtmpfs' && echo native || { [ -d /dev ] && [ -e /dev/null ] && echo emulated || echo unavailable; } ;;
         bind_mount)
-            # real test: perform an actual bind mount inside a private mount ns
+            # Build 551: mount gates on CAP_SYS_ADMIN. Works in a private user+mount
+            # ns (unshare -mUr gives the caps) even as default-user; test that path.
             if has unshare && has mount; then
-                unshare -m /bin/sh -c '_a=$(mktemp -d) _b=$(mktemp -d) || exit 1; echo hi > "$_a/f"; mount --bind "$_a" "$_b" 2>/dev/null && [ -f "$_b/f" ]' 2>/dev/null \
-                    && echo native || echo unavailable
+                if unshare -m /bin/sh -c '_a=$(mktemp -d) _b=$(mktemp -d) || exit 1; echo hi > "$_a/f"; mount --bind "$_a" "$_b" 2>/dev/null && [ -f "$_b/f" ]' 2>/dev/null; then echo native
+                elif unshare -mUr /bin/sh -c '_a=$(mktemp -d) _b=$(mktemp -d) || exit 1; echo hi > "$_a/f"; mount --bind "$_a" "$_b" 2>/dev/null && [ -f "$_b/f" ]' 2>/dev/null; then echo native
+                elif [ "$(id -u 2>/dev/null)" != 0 ]; then echo needs-privilege
+                else echo unavailable; fi
             elif has mount; then echo emulated
+            else echo unavailable; fi ;;
+        file_bind)
+            # Build 551: mount --bind can now bind a single FILE over another file
+            # (shadow a config without touching the original). Real test.
+            if has unshare && has mount; then
+                unshare -m /bin/sh -c '_d=$(mktemp -d)||exit 1; echo orig>"$_d/a"; echo new>"$_d/b"; mount --bind "$_d/b" "$_d/a" 2>/dev/null && [ "$(cat "$_d/a")" = new ]' 2>/dev/null \
+                    && echo native || { [ "$(id -u 2>/dev/null)" != 0 ] && echo needs-privilege || echo unavailable; }
+            else echo unavailable; fi ;;
+        rbind)
+            # Build 551: --rbind is genuinely recursive (MS_REC no longer a no-op).
+            if has unshare && has mount; then
+                unshare -m /bin/sh -c '_s=$(mktemp -d) _sub=$(mktemp -d) _d=$(mktemp -d)||exit 1; mount -t tmpfs none "$_s" 2>/dev/null||exit 1; mkdir -p "$_s/sub"; mount -t tmpfs none "$_s/sub" 2>/dev/null; echo x>"$_s/sub/f"; mount --rbind "$_s" "$_d" 2>/dev/null && [ -f "$_d/sub/f" ]' 2>/dev/null \
+                    && echo native || echo unavailable
             else echo unavailable; fi ;;
         seccomp)
             # seccomp is reported in /proc/self/status as "Seccomp:" (0=off).
@@ -2080,7 +2130,17 @@ braok_probe() {
                 _sv="$(grep '^Seccomp:' /proc/self/status 2>/dev/null | awk '{print $2}')"
                 [ "${_sv:-0}" = "0" ] && echo "disabled" || echo native
             else echo unavailable; fi ;;
-        fuse)      [ -e /dev/fuse ] && echo native || echo unavailable ;;
+        fuse)
+            # Build 551: FUSE (protocol 7.31, libfuse2+3). Native only if BOTH the
+            # device node exists AND the kernel advertises the fuse filesystem type.
+            # v1 limits (no mmap → no exec from a FUSE mount) are documented, not here.
+            if [ -e /dev/fuse ] && grep -qw fuse /proc/filesystems 2>/dev/null; then echo native
+            elif [ -e /dev/fuse ]; then echo emulated
+            else echo unavailable; fi ;;
+        fuse_exec)
+            # Honest: FUSE v1 has no mmap, so binaries can't execute from a FUSE
+            # mount. This is ALWAYS unavailable on build 551 by design.
+            echo unavailable ;;
         systemd)
             [ -d /run/systemd/system ] && echo native || { has systemctl && echo emulated || echo unavailable; } ;;
         crossfs)   echo emulated ;;   # emulated by design (no FUSE requirement)
@@ -2158,19 +2218,20 @@ braok_detect_caps() {
     _tmp="${BRAOK_CAPS}.new"
     {
         echo "# Bedrock-AOK detected capabilities — generated $(date 2>/dev/null || echo)"
-        echo "# values: native | emulated | unavailable"
-        for _k in arch chroot bind_mount unshare nsenter mount_ns user_ns pid_ns net_ns uts_ns ipc_ns cgroup_ns cgroup2 procfs sysfs devtmpfs devpts tmpfs systemd seccomp fuse crossfs etcfs aok_roots aok_persist; do
+        echo "# values: native | emulated | needs-privilege | disabled | unavailable"
+        for _k in arch chroot bind_mount file_bind rbind unshare nsenter mount_ns user_ns pid_ns net_ns uts_ns ipc_ns cgroup_ns cgroup2 procfs sysfs devtmpfs devpts tmpfs systemd seccomp fuse fuse_exec crossfs etcfs aok_roots aok_persist; do
             printf '%s=%s\n' "$_k" "$(braok_probe "$_k")"
         done
     } > "$_tmp" 2>/dev/null && mv "$_tmp" "$BRAOK_CAPS" 2>/dev/null || true
     braok_log info "capabilities detected -> $BRAOK_CAPS"
 }
 cap_of() { [ -f "$BRAOK_CAPS" ] && grep "^${1}=" "$BRAOK_CAPS" 2>/dev/null | head -1 | cut -d= -f2 || braok_probe "$1"; }
-# require a native/emulated capability or print a clear error
+# require a native/emulated capability or print a clear error. "needs-privilege"
+# is acceptable (we can elevate via user-ns/sudo), so it passes too.
 require_cap() {
     _rc="$(cap_of "$1")"
-    case "$_rc" in native|emulated) return 0 ;; esac
-    err "operation needs '${1}' which is ${color_alert}unavailable${color_norm} on this iSH-AOK build."
+    case "$_rc" in native|emulated|needs-privilege) return 0 ;; esac
+    err "operation needs '${1}' which is ${color_alert}${_rc:-unavailable}${color_norm} on this iSH-AOK build."
     return 1
 }
 
@@ -2233,6 +2294,30 @@ brl_harden() {
     say "    ${color_cmd}BRL_STRICT=1 brl fetch <stratum>${color_norm}   (keep distro gpg checks on)"
     say "  and never set BRL_INSECURE unless a mirror genuinely lacks TLS."
     braok_log info "hardening applied" 2>/dev/null || true
+}
+
+# brl fuse — report FUSE availability + build-551 limits, honestly.
+brl_fuse() {
+    print_logo "Bedrock-AOK FUSE (build 551+)"
+    _fs="$(cap_of fuse)"
+    case "$_fs" in
+        native)
+            ok "FUSE available: /dev/fuse present and kernel advertises 'fuse'"
+            say "  protocol:   7.31 (libfuse2 and libfuse3 both work)"
+            say "  use it for: sshfs-style overlays, archive mounts, in-memory scratch FS"
+            say "  compile your FUSE daemon inside a stratum against its own libfuse."
+            warn "v1 limits (by design): no mmap → ${color_alert}binaries cannot execute${color_norm} from a"
+            say "    FUSE mount; no FUSE_INTERRUPT/FORGET, no readdirplus, no splice."
+            say "  → this is why crossfs stays symlink-based: cross-stratum ${color_cmd}binaries${color_norm}"
+            say "    must be executable, and exec-from-FUSE is blocked. Data mounts are fine."
+            [ -f /AOK/docs/fuse.md ] && say "  docs: /AOK/docs/fuse.md" ;;
+        emulated)
+            warn "/dev/fuse exists but kernel doesn't advertise the fuse filesystem yet"
+            say "  update to iSH-AOK build 551+ for full FUSE support." ;;
+        *)
+            warn "FUSE not available on this build"
+            say "  requires iSH-AOK build 551 or newer (protocol 7.31)." ;;
+    esac
 }
 brl_capabilities() {
     [ -f "$BRAOK_CAPS" ] || braok_detect_caps
@@ -2648,6 +2733,16 @@ brl_test() {
     _t "catalog has 29 distros"  "[ \"\$(catalog_names | tr ' ' '\\n' | grep -c .)\" -ge 29 ]"
     _t "harden function present" "command -v brl_harden >/dev/null 2>&1"
     _t "repair function present" "command -v braok_repair_system >/dev/null 2>&1"
+    say "${B}Build 551 (FUSE / privilege)${Z}"
+    _t "fuse probe returns value"  "[ -n \"\$(braok_probe fuse)\" ]"
+    _t "file_bind probe returns"   "[ -n \"\$(braok_probe file_bind)\" ]"
+    _t "rbind probe returns"       "[ -n \"\$(braok_probe rbind)\" ]"
+    _t "fuse_exec honestly unavail" "[ \"\$(braok_probe fuse_exec)\" = unavailable ]"
+    _t "chroot probe 3-state ok"   "case \"\$(braok_probe chroot)\" in native|unavailable|needs-privilege) true;; *) false;; esac"
+    _t "brl fuse command present"  "command -v brl_fuse >/dev/null 2>&1"
+    _t "fuse mount fns present"    "command -v brl_mount_archive >/dev/null 2>&1 && command -v brl_mount_sshfs >/dev/null 2>&1 && command -v brl_mount_overlay >/dev/null 2>&1"
+    _t "fuse registry teardown ok" "_fuse_cleanup_all; [ ! -s \"\$FUSE_REG\" ]"
+    _t "fuse track/untrack works"  "_fuse_track test /tmp/fusetest s; grep -q /tmp/fusetest \"\$FUSE_REG\"; _fuse_untrack /tmp/fusetest; ! grep -q /tmp/fusetest \"\$FUSE_REG\" 2>/dev/null"
     say "${B}Security${Z}"
     _t "sha256 tool present"     "has sha256sum || has shasum || has openssl"
     _t "verify_sha256 detects match" "_tf1=\$(mktemp); echo bedrock>\$_tf1; _th=\$(_sha256 \$_tf1); verify_sha256 \$_tf1 \$_th"
@@ -2775,6 +2870,140 @@ run_installer() {
     esac
 }
 
+# ── FUSE data mounts (build 551+) ───────────────────────────────────────
+# Genuine, safe uses of FUSE: data filesystems only. Never used for anything
+# executable — build 551 FUSE has no mmap, so binaries can't run from a FUSE
+# mount, which is exactly why crossfs stays symlink-based. These are all
+# DATA mounts: archives, network filesystems, rootless overlays, scratch space.
+#
+# Every mount is tracked in $FUSE_REG so brl umount / unhijack / uninstall can
+# cleanly tear them down. Every tool degrades gracefully if FUSE or the helper
+# binary is absent — nothing here can break a working install.
+
+FUSE_REG="${BRUN}/fuse-mounts"
+
+_fuse_ok() {
+    _fk="$(cap_of fuse 2>/dev/null)"
+    [ "$_fk" = native ] || { err "FUSE not available on this build (need iSH-AOK 551+). See: brl fuse"; return 1; }
+    return 0
+}
+# Record a mount so we can clean it up later. Args: type mountpoint stratum
+_fuse_track() { mkdir -p "$BRUN" 2>/dev/null || true; printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$FUSE_REG" 2>/dev/null || true; }
+_fuse_untrack() {
+    [ -f "$FUSE_REG" ] || return 0
+    grep -vF "	$1	" "$FUSE_REG" > "${FUSE_REG}.new" 2>/dev/null || true
+    mv "${FUSE_REG}.new" "$FUSE_REG" 2>/dev/null || true
+}
+# Unmount a FUSE mountpoint the rootless way (fusermount3/fusermount -u),
+# falling back to umount. Lazy so a busy mount still detaches.
+_fuse_unmount_one() {
+    _fmp="$1"
+    if has fusermount3; then fusermount3 -u "$_fmp" 2>/dev/null && { _fuse_untrack "$_fmp"; return 0; }; fi
+    if has fusermount;  then fusermount  -u "$_fmp" 2>/dev/null && { _fuse_untrack "$_fmp"; return 0; }; fi
+    umount "$_fmp" 2>/dev/null || umount -l "$_fmp" 2>/dev/null || true
+    _fuse_untrack "$_fmp"
+}
+# Clean up every tracked FUSE mount (called by brl umount, unhijack, uninstall).
+_fuse_cleanup_all() {
+    [ -f "$FUSE_REG" ] || return 0
+    while IFS="$(printf '\t')" read -r _ft _fm _fs; do
+        [ -n "$_fm" ] && _fuse_unmount_one "$_fm"
+    done < "$FUSE_REG" 2>/dev/null
+    : > "$FUSE_REG" 2>/dev/null || true
+}
+# Ensure a helper binary exists inside a stratum; offer to install it. Returns
+# 0 if usable (present now, or installed). Args: stratum binary pkg
+_fuse_need_helper() {
+    _fhs="$1"; _fhb="$2"; _fhp="$3"
+    cmd_strat "$_fhs" /bin/sh -c "command -v '$_fhb' >/dev/null 2>&1" 2>/dev/null && return 0
+    warn "'$_fhb' is not installed in stratum '${_fhs}'"
+    _ic="$(_pkg_install_cmd "${STRATA}/$(deref "$_fhs")" 2>/dev/null)"
+    if [ -n "$_ic" ]; then
+        say "  installing ${_fhp} ..."
+        cmd_strat "$_fhs" /bin/sh -c "$_ic $_fhp" 2>/dev/null || true
+        cmd_strat "$_fhs" /bin/sh -c "command -v '$_fhb' >/dev/null 2>&1" 2>/dev/null && return 0
+    fi
+    err "could not provide '$_fhb'. Install '${_fhp}' in ${_fhs} and retry."
+    return 1
+}
+
+# brl mount-archive <stratum> <archive> <mountpoint>
+# Mount a tar/zip/iso/etc as a browsable directory via FUSE (archivemount or
+# fuse-archive). Read data out of an archive without extracting it.
+brl_mount_archive() {
+    need_root; _fuse_ok || return 1
+    _mas="${1:-}"; _maa="${2:-}"; _mam="${3:-}"
+    [ -n "$_mas" ] && [ -n "$_maa" ] && [ -n "$_mam" ] || die "usage: brl mount-archive <stratum> <archive> <mountpoint>"
+    stratum_exists "$_mas" || die "no such stratum: $_mas"
+    # helper: prefer fuse-archive, fall back to archivemount
+    _mahb="archivemount"; _mahp="archivemount"
+    if cmd_strat "$_mas" /bin/sh -c 'command -v fuse-archive >/dev/null 2>&1' 2>/dev/null; then _mahb="fuse-archive"; _mahp="fuse-archive"; fi
+    _fuse_need_helper "$_mas" "$_mahb" "$_mahp" || return 1
+    cmd_strat "$_mas" /bin/sh -c "mkdir -p '$_mam' && $_mahb '$_maa' '$_mam'" 2>/dev/null \
+        && { _fuse_track archive "$_mam" "$_mas"; ok "mounted ${color_file}${_maa}${color_norm} at ${color_file}${_mam}${color_norm} (in ${_mas})"; say "  browse it, copy files out; unmount: ${color_cmd}brl unmount ${_mam}${color_norm}"; } \
+        || die "archive mount failed"
+}
+
+# brl mount-sshfs <stratum> <user@host:/path> <mountpoint>
+# Network filesystem into a stratum over SSH.
+brl_mount_sshfs() {
+    need_root; _fuse_ok || return 1
+    _sss="${1:-}"; _ssr="${2:-}"; _ssm="${3:-}"
+    [ -n "$_sss" ] && [ -n "$_ssr" ] && [ -n "$_ssm" ] || die "usage: brl mount-sshfs <stratum> <user@host:/path> <mountpoint>"
+    stratum_exists "$_sss" || die "no such stratum: $_sss"
+    _fuse_need_helper "$_sss" "sshfs" "sshfs" || return 1
+    say "  connecting ${_ssr} ..."
+    cmd_strat "$_sss" /bin/sh -c "mkdir -p '$_ssm' && sshfs -o reconnect,ServerAliveInterval=15 '$_ssr' '$_ssm'" \
+        && { _fuse_track sshfs "$_ssm" "$_sss"; ok "mounted ${_ssr} at ${_ssm} (in ${_sss})"; } \
+        || die "sshfs mount failed (check credentials / host)"
+}
+
+# brl mount-overlay <stratum> <lower> <upper> <mountpoint>
+# Rootless overlay filesystem via fuse-overlayfs — layer a writable dir over a
+# read-only one WITHOUT root. Great for experimenting on a stratum's files
+# without touching the originals.
+brl_mount_overlay() {
+    need_root; _fuse_ok || return 1
+    _ovs="${1:-}"; _ovl="${2:-}"; _ovu="${3:-}"; _ovm="${4:-}"
+    [ -n "$_ovs" ] && [ -n "$_ovl" ] && [ -n "$_ovu" ] && [ -n "$_ovm" ] || die "usage: brl mount-overlay <stratum> <lower-dir> <upper-dir> <mountpoint>"
+    stratum_exists "$_ovs" || die "no such stratum: $_ovs"
+    _fuse_need_helper "$_ovs" "fuse-overlayfs" "fuse-overlayfs" || return 1
+    cmd_strat "$_ovs" /bin/sh -c "mkdir -p '$_ovu/upper' '$_ovu/work' '$_ovm' && fuse-overlayfs -o lowerdir='$_ovl',upperdir='$_ovu/upper',workdir='$_ovu/work' '$_ovm'" \
+        && { _fuse_track overlay "$_ovm" "$_ovs"; ok "rootless overlay at ${_ovm} (lower=${_ovl}, writable upper)"; } \
+        || die "overlay mount failed"
+}
+
+# brl scratch <stratum> <mountpoint>
+# A private in-memory scratch filesystem. Uses tmpfs (fast, always works) and
+# is tracked/cleaned like a FUSE mount for a uniform teardown story.
+brl_scratch() {
+    need_root
+    _scs="${1:-}"; _scm="${2:-}"
+    [ -n "$_scs" ] && [ -n "$_scm" ] || die "usage: brl scratch <stratum> <mountpoint>"
+    stratum_exists "$_scs" || die "no such stratum: $_scs"
+    cmd_strat "$_scs" /bin/sh -c "mkdir -p '$_scm' && { mount -t tmpfs -o size=${BRL_SCRATCH_SIZE:-256m} tmpfs '$_scm' || mount -t tmpfs tmpfs '$_scm'; }" \
+        && { _fuse_track scratch "$_scm" "$_scs"; ok "scratch filesystem at ${_scm} (in ${_scs}); cleared on unmount"; } \
+        || die "scratch mount failed"
+}
+
+# brl fuse-mounts — list every mount brl created (archive/sshfs/overlay/scratch).
+brl_fuse_mounts() {
+    print_logo "Bedrock-AOK FUSE mounts"
+    if [ ! -s "$FUSE_REG" ]; then say "  (no active brl-managed mounts)"; return 0; fi
+    printf "  ${B}%-9s %-30s %s${Z}\n" "TYPE" "MOUNTPOINT" "STRATUM"
+    while IFS="$(printf '\t')" read -r _lt _lm _ls; do
+        [ -n "$_lm" ] && printf "  %-9s %-30s %s\n" "$_lt" "$_lm" "$_ls"
+    done < "$FUSE_REG"
+    say ""; say "  unmount one: ${color_cmd}brl unmount <mountpoint>${color_norm}   all: ${color_cmd}brl umount${color_norm}"
+}
+
+# brl unmount <mountpoint> — cleanly unmount one brl-managed FUSE/scratch mount.
+brl_unmount() {
+    need_root; _umm="${1:-}"
+    [ -n "$_umm" ] || die "usage: brl unmount <mountpoint>"
+    _fuse_unmount_one "$_umm" && ok "unmounted ${_umm}"
+}
+
 # ── dispatch ────────────────────────────────────────────────────────────
 _base="$(basename "$0" 2>/dev/null || echo brl)"
 case "$_base" in
@@ -2812,6 +3041,13 @@ case "$_cmd" in
     capabilities|caps) brl_capabilities "$@" ;;
     security)      brl_security "$@" ;;
     harden)        brl_harden "$@" ;;
+    fuse)          brl_fuse "$@" ;;
+    mount-archive) brl_mount_archive "$@" ;;
+    mount-sshfs)   brl_mount_sshfs "$@" ;;
+    mount-overlay) brl_mount_overlay "$@" ;;
+    scratch)       brl_scratch "$@" ;;
+    fuse-mounts)   brl_fuse_mounts "$@" ;;
+    unmount)       brl_unmount "$@" ;;
     pin)           brl_pin "$@" ;;
     export)        brl_export "$@" ;;
     import-tar)    brl_import_tar "$@" ;;
